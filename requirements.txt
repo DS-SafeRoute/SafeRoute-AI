@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+boto3
+pillow
+python-dotenv
+torch
+torchvision
+scipy
+scikit-image
+networkx
+matplotlib

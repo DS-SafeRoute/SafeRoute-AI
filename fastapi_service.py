@@ -1,0 +1,271 @@
+"""
+Safe Route AI 분석 서비스 (FastAPI)
+
+
+노드 타입 매핑:
+    is_door=True                -> DOOR
+    space_type == "room"        -> ROOM
+    space_type == "corridor"    -> HALLWAY
+    space_type == "stairs"      -> STAIR
+    EXIT / CUSTOM 은 이 서비스가 생성하지 않음 (관리자가 나중에 지정)
+
+좌표: 0.0~1.0 정규화 (MapNode.pos_x/pos_y 규격에 맞춤)
+거리: 미터 단위 (MapEdge.distance 규격에 맞춤).
+    요청 시 real_width_m/real_height_m(도면이 나타내는 실제 층 크기, 업로드 시
+    관리자가 같이 입력)을 받아서 픽셀->미터 변환에 사용함.
+"""
+
+import os
+
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
+import io
+import math
+import tempfile
+from typing import List
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+import boto3
+import torch
+from fastapi import FastAPI, HTTPException
+from PIL import Image
+from pydantic import BaseModel, Field
+
+from run_real_floorplan_pipeline import analyze_floorplan
+from model import UNet
+
+
+app = FastAPI(title="Safe Route AI Service")
+
+MODEL_PATH = os.environ.get("SAFEROUTE_MODEL_PATH", "unet_finetuned.pth")
+S3_BUCKET = os.environ.get("SAFEROUTE_S3_BUCKET")
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+_model = None
+_s3_client = None
+
+
+@app.on_event("startup")
+def load_resources():
+    global _model, _s3_client
+
+    print(f"모델 로딩 중... ({MODEL_PATH}, device={DEVICE})")
+    _model = UNet(in_channels=3, num_classes=6).to(DEVICE)
+    _model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+    _model.eval()
+    print("모델 로딩 완료")
+
+    if not S3_BUCKET:
+        print("경고: SAFEROUTE_S3_BUCKET 환경변수가 설정되지 않았습니다.")
+    _s3_client = boto3.client("s3")
+
+
+def download_image_from_s3(image_key: str) -> Image.Image:
+    if not S3_BUCKET:
+        raise HTTPException(status_code=500, detail="SAFEROUTE_S3_BUCKET 환경변수가 설정되지 않았습니다.")
+    buf = io.BytesIO()
+    try:
+        _s3_client.download_fileobj(S3_BUCKET, image_key, buf)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"S3에서 이미지를 찾을 수 없습니다 (key={image_key}): {e}")
+    buf.seek(0)
+    return Image.open(buf).convert("RGB")
+
+
+# ------------------------------------------------------------
+# 요청/응답 스키마
+# ------------------------------------------------------------
+class AnalyzeRequest(BaseModel):
+    image_key: str = Field(..., description="S3 상의 도면 이미지 키(경로)")
+    real_width_m: float = Field(..., gt=0, description="이 도면이 나타내는 층의 실제 가로 길이(미터)")
+    real_height_m: float = Field(..., gt=0, description="이 도면이 나타내는 층의 실제 세로 길이(미터)")
+    image_size: int = Field(512, description="분석용 내부 리사이즈 크기 (모델 입력 크기)")
+
+
+class NodeOut(BaseModel):
+    temp_id: str          # Spring 노드<->엣지를 매핑 임시 키
+    code: str
+    type: str               # ROOM / HALLWAY / STAIR / DOOR
+    x: float                 # 0.0~1.0 정규화 x좌표
+    y: float                 # 0.0~1.0 정규화 y좌표
+
+
+class EdgeOut(BaseModel):
+    from_temp_id: str
+    to_temp_id: str
+    distance: float
+    bidirectional: bool = True
+
+
+class AnalyzeResponse(BaseModel):
+    plan_width_px: int
+    plan_height_px: int
+    nodes: List[NodeOut]
+    edges: List[EdgeOut]
+    stats: dict
+
+
+def map_space_type_to_node_type(is_door: bool, space_type: str) -> str:
+    if is_door:
+        return "DOOR"
+    mapping = {"room": "ROOM", "corridor": "HALLWAY", "stairs": "STAIR"}
+    return mapping.get(space_type, "HALLWAY")
+
+
+# ------------------------------------------------------------
+# 엔드포인트
+# ------------------------------------------------------------
+@app.post("/analyze-floorplan", response_model=AnalyzeResponse)
+def analyze_floorplan_endpoint(req: AnalyzeRequest):
+    original_image = download_image_from_s3(req.image_key)
+    plan_width_px, plan_height_px = original_image.size  # 리사이즈 전 원본 픽셀 크기
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+        original_image.save(tmp.name)
+        tmp_path = tmp.name
+
+    try:
+        result = analyze_floorplan(
+            tmp_path, model=_model, device=DEVICE, image_size=req.image_size
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"도면 분석 중 오류: {e}")
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    G = result["G"]
+    if G.number_of_nodes() == 0:
+        raise HTTPException(status_code=422, detail="도면에서 노드를 하나도 찾지 못했습니다.")
+
+    # x(col)축 = 가로, y(row)축 = 세로
+    width_scale = req.real_width_m / req.image_size
+    height_scale = req.real_height_m / req.image_size
+
+    # 타입별로 순번을 매겨서 code 생성 (예: door_1, room_1, room_2, ...)
+    type_counters: dict = {}
+    nodes_out = []
+    for node_key, data in G.nodes(data=True):
+        node_type = map_space_type_to_node_type(
+            data.get("is_door", False), data.get("space_type", "corridor")
+        )
+        type_counters[node_type] = type_counters.get(node_type, 0) + 1
+        code = f"{node_type.lower()}_{type_counters[node_type]}"
+
+        nodes_out.append(
+            NodeOut(
+                temp_id=str(node_key),
+                code=code,
+                type=node_type,
+                x=round(data["col"] / req.image_size, 4),
+                y=round(data["row"] / req.image_size, 4),
+            )
+        )
+
+    edges_out = []
+    for u, v, edata in G.edges(data=True):
+        dr = G.nodes[u]["row"] - G.nodes[v]["row"]
+        dc = G.nodes[u]["col"] - G.nodes[v]["col"]
+        distance_m = math.sqrt((dc * width_scale) ** 2 + (dr * height_scale) ** 2)
+        if distance_m <= 0:
+            distance_m = 0.01
+        edges_out.append(
+            EdgeOut(
+                from_temp_id=str(u),
+                to_temp_id=str(v),
+                distance=round(distance_m, 3),
+                bidirectional=True,
+            )
+        )
+
+    return AnalyzeResponse(
+        plan_width_px=plan_width_px, plan_height_px=plan_height_px,
+        nodes=nodes_out, edges=edges_out, stats=result["stats"],
+    )
+
+
+@app.get("/health")
+def health():
+    s3_ok = None
+    if S3_BUCKET:
+        try:
+            _s3_client.head_bucket(Bucket=S3_BUCKET)
+            s3_ok = True
+        except Exception:
+            s3_ok = False
+
+    return {
+        "status": "ok",
+        "device": str(DEVICE),
+        "model_loaded": _model is not None,
+        "bucket": S3_BUCKET,
+        "bucket_accessible": s3_ok,
+    }
+
+
+# ------------------------------------------------------------
+# 개발용 엔드포인트 (S3 접근 권한 세팅 전, 로컬 파일 테스트용)
+# ------------------------------------------------------------
+if os.environ.get("ENABLE_LOCAL_TEST", "false").lower() == "true":
+
+    class AnalyzeLocalRequest(BaseModel):
+        local_image_path: str = Field(..., description="S3 대신 로컬 파일 경로로 테스트 (개발용)")
+        real_width_m: float = Field(..., gt=0)
+        real_height_m: float = Field(..., gt=0)
+        image_size: int = Field(512)
+
+    @app.post("/analyze-floorplan-local", response_model=AnalyzeResponse)
+    def analyze_floorplan_local_endpoint(req: AnalyzeLocalRequest):
+        if not os.path.exists(req.local_image_path):
+            raise HTTPException(status_code=404, detail=f"파일을 찾을 수 없습니다: {req.local_image_path}")
+
+        original_image = Image.open(req.local_image_path).convert("RGB")
+        plan_width_px, plan_height_px = original_image.size
+
+        try:
+            result = analyze_floorplan(
+                req.local_image_path, model=_model, device=DEVICE, image_size=req.image_size
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"도면 분석 중 오류: {e}")
+
+        G = result["G"]
+        if G.number_of_nodes() == 0:
+            raise HTTPException(status_code=422, detail="도면에서 노드를 하나도 찾지 못했습니다.")
+
+        width_scale = req.real_width_m / req.image_size
+        height_scale = req.real_height_m / req.image_size
+
+        type_counters: dict = {}
+        nodes_out = []
+        for node_key, data in G.nodes(data=True):
+            node_type = map_space_type_to_node_type(
+                data.get("is_door", False), data.get("space_type", "corridor")
+            )
+            type_counters[node_type] = type_counters.get(node_type, 0) + 1
+            code = f"{node_type.lower()}_{type_counters[node_type]}"
+            nodes_out.append(NodeOut(
+                temp_id=str(node_key), code=code, type=node_type,
+                x=round(data["col"] / req.image_size, 4),
+                y=round(data["row"] / req.image_size, 4),
+            ))
+
+        edges_out = []
+        for u, v, edata in G.edges(data=True):
+            dr = G.nodes[u]["row"] - G.nodes[v]["row"]
+            dc = G.nodes[u]["col"] - G.nodes[v]["col"]
+            distance_m = math.sqrt((dc * width_scale) ** 2 + (dr * height_scale) ** 2)
+            if distance_m <= 0:
+                distance_m = 0.01
+            edges_out.append(EdgeOut(
+                from_temp_id=str(u), to_temp_id=str(v),
+                distance=round(distance_m, 3), bidirectional=True,
+            ))
+
+        return AnalyzeResponse(
+            plan_width_px=plan_width_px, plan_height_px=plan_height_px,
+            nodes=nodes_out, edges=edges_out, stats=result["stats"],
+        )
