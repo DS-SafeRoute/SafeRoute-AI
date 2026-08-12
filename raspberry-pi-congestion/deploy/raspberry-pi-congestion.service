@@ -1,0 +1,18 @@
+[Unit]
+Description=SafeRoute Edge Congestion Detector (CCTV_01)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/raspberry-pi-congestion
+EnvironmentFile=/home/pi/raspberry-pi-congestion/.env
+ExecStart=/home/pi/raspberry-pi-congestion/.venv/bin/python -m raspberry_pi_congestion.main rtsp
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

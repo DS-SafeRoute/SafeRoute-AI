@@ -1,0 +1,10 @@
+# Raspberry Pi 5 (Raspberry Pi OS 64-bit) 운영용.
+# hailo_platform(pyhailort)은 PyPI가 아니라 Hailo가 배포하는 HailoRT 설치 패키지 안의
+# .whl 파일로 설치한다 (예: hailort_<ver>_arm64.deb 설치 후 함께 제공되는 python wheel,
+# 또는 Hailo Developer Zone에서 받은 아키텍처에 맞는 wheel).
+#   pip install /opt/hailo/hailort/python/hailort-X.Y.Z-cpXY-cpXY-linux_aarch64.whl
+# 정확한 경로/버전은 설치한 HailoRT 패키지 버전에 따라 다르므로 실기기에서 확인할 것.
+numpy>=1.24
+opencv-python-headless>=4.8
+requests>=2.31
+python-dotenv>=1.0
