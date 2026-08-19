@@ -50,7 +50,12 @@ def main(argv=None) -> int:
     reporter = LoggingCongestionReporter() if device_client is None else device_client
     source = create_video_source(config.video_source, file_loop=config.video_loop,
                                  max_reconnects=config.rtsp_max_reconnects,
-                                 base_delay_sec=config.rtsp_reconnect_base_delay_sec) if config.mode == "rtsp" else FileVideoSource(config.video_source, config.video_loop)
+                                 base_delay_sec=config.rtsp_reconnect_base_delay_sec) if config.mode == "rtsp" else FileVideoSource(
+        config.video_source,
+        config.video_loop,
+        realtime=config.file_realtime,
+        fallback_fps=config.file_fallback_fps,
+    )
     if config.mode == "test":
         from .detectors import FakePersonDetector
         detector = FakePersonDetector()

@@ -36,6 +36,8 @@ class AppConfig:
     rtsp_max_reconnects: int
     rtsp_reconnect_base_delay_sec: float
     video_loop: bool
+    file_realtime: bool
+    file_fallback_fps: float
     log_level: str
 
     @staticmethod
@@ -72,5 +74,6 @@ class AppConfig:
             offline_queue_max_age_sec=float(e.get("OFFLINE_QUEUE_MAX_AGE_SEC", "86400")), offline_queue_max_items=int(e.get("OFFLINE_QUEUE_MAX_ITEMS", "1000")),
             offline_flush_interval_sec=float(e.get("OFFLINE_FLUSH_INTERVAL_SEC", "30")), rtsp_max_reconnects=int(e.get("RTSP_MAX_RECONNECTS", "5")),
             rtsp_reconnect_base_delay_sec=float(e.get("RTSP_RECONNECT_BASE_DELAY_SEC", "1")), video_loop=boolean("VIDEO_LOOP", False),
+            file_realtime=boolean("FILE_REALTIME", True), file_fallback_fps=float(e.get("FILE_FALLBACK_FPS", "30")),
             log_level=e.get("LOG_LEVEL", "INFO"),
         )
