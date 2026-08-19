@@ -3,13 +3,16 @@ from raspberry_pi_congestion.window_aggregator import WindowAggregator
 
 class Clock:
     value = 0.0
-    def __call__(self): return self.value
+
+    def __call__(self):
+        return self.value
 
 
 def test_five_second_window_average_peak_and_sample_count():
     clock = Clock()
     agg = WindowAggregator(5, clock)
-    for count, now in [(2, 1000), (4, 2000), (6, 3000)]: agg.add_sample(count, now)
+    for count, now in [(2, 1000), (4, 2000), (6, 3000)]:
+        agg.add_sample(count, now)
     clock.value = 5
     assert agg.should_flush()
     result = agg.flush(6000)

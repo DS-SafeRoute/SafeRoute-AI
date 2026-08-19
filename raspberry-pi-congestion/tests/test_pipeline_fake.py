@@ -11,27 +11,52 @@ from raspberry_pi_congestion.window_aggregator import WindowAggregator
 
 class Clock:
     value = 0.0
-    def __call__(self): return self.value
-    def sleep(self, seconds): self.value += seconds
+
+    def __call__(self):
+        return self.value
+
+    def sleep(self, seconds):
+        self.value += seconds
 
 
 class Source:
-    def __init__(self, frame): self.frame = frame; self.closed = False
-    def frames(self): yield self.frame
-    def close(self): self.closed = True
+    def __init__(self, frame):
+        self.frame = frame
+        self.closed = False
+
+    def frames(self):
+        yield self.frame
+
+    def close(self):
+        self.closed = True
 
 
 class Reporter(CongestionReporter):
-    def __init__(self): self.items = []
-    def report(self, item): self.items.append(item); return True
+    def __init__(self):
+        self.items = []
+
+    def report(self, item):
+        self.items.append(item)
+        return True
 
 
 class Capture:
-    def __init__(self, frames, fps): self.frames = list(frames); self.fps = fps; self.released = False
-    def isOpened(self): return True
-    def read(self): return (True, self.frames.pop(0)) if self.frames else (False, None)
-    def get(self, _): return self.fps
-    def release(self): self.released = True
+    def __init__(self, frames, fps):
+        self.frames = list(frames)
+        self.fps = fps
+        self.released = False
+
+    def isOpened(self):
+        return True
+
+    def read(self):
+        return (True, self.frames.pop(0)) if self.frames else (False, None)
+
+    def get(self, _):
+        return self.fps
+
+    def release(self):
+        self.released = True
 
 
 def test_fake_detector_pipeline_and_resource_cleanup():
