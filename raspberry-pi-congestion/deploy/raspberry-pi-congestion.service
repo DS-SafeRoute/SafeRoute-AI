@@ -1,5 +1,5 @@
 [Unit]
-Description=SafeRoute Edge Congestion Detector (CCTV_01)
+Description=SafeRoute Raspberry Pi Congestion Detector
 After=network-online.target
 Wants=network-online.target
 
@@ -8,7 +8,8 @@ Type=simple
 User=pi
 WorkingDirectory=/home/pi/raspberry-pi-congestion
 EnvironmentFile=/home/pi/raspberry-pi-congestion/.env
-ExecStart=/home/pi/raspberry-pi-congestion/.venv/bin/python -m raspberry_pi_congestion.main rtsp
+# 실행 모드는 장치별 .env의 RUN_MODE 값(file 또는 rtsp)을 사용한다.
+ExecStart=/home/pi/raspberry-pi-congestion/.venv/bin/python -m raspberry_pi_congestion.main
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

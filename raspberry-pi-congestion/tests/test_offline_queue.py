@@ -15,6 +15,7 @@ def test_event_id_survives_restart(tmp_path):
 
 def test_capacity_is_bounded(tmp_path):
     queue = OfflineQueue(str(tmp_path / "queue.db"), max_items=2)
-    for i in range(3): queue.enqueue(str(i), {"eventId": str(i)})
+    for i in range(3):
+        queue.enqueue(str(i), {"eventId": str(i)})
     assert [item.event_id for item in queue.peek_oldest()] == ["1", "2"]
     queue.close()

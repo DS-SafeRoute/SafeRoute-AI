@@ -1,36 +1,41 @@
 # SafeRoute Raspberry Pi congestion observer
 
-Raspberry Pi가 영상 또는 RTSP를 읽고 로컬 ROI 안의 사람 수를 5초 단위로 집계해 Spring BE에 전달하는 프로젝트다. Python은 밀도, 혼잡 단계, 면적, GridCell 또는 MapEdge를 계산하지 않는다.
+Raspberry Pi가 CCTV 영상의 ROI 안 사람 수를 5 FPS로 추론하고, Spring BE 설정에 따라 관측값·혼잡 이벤트·JPEG 이미지를 전송한다. Pi는 `GridCell`, `MapEdge`, 경로 계산, 관리자 승인 처리를 하지 않는다.
 
-## 책임 경계
+## 현재 연동 계약
 
-Python은 person 검출, bottom-center ROI 판정, `avgHeadcount`/`peakHeadcount` 집계와 전송만 담당한다. Spring BE는 `cctvCode`로 CCTV와 FloorGridCell을 조회하고 실제 면적 합계로 밀도를 계산한 뒤 서울시 기준 단계 판정, MapEdge 조회, 경로 재계산, DynamoDB 저장, WebSocket 발행과 유도등 명령 생성을 담당한다. `floor_analysis`와 이 런타임 사이에는 호출이나 패키지 의존성이 없다.
+- 장치 코드는 데모 기준 `CCTV_001` 또는 `CCTV_002`이고, 각 장치의 전용 Bearer Token은 `DEVICE_AUTH_TOKEN`으로만 주입한다.
+- `GET /api/v1/device/congestion-config?cctvCode=...`를 훈련 중 5초, 비활성 중 15초 간격으로 조회한다.
+- `trainingSessionId`는 BE가 준 UUID를 그대로 사용한다. Pi가 세션 ID를 생성하지 않는다.
+- `trainingActive=false`이면 추론, 관측값, 이벤트, 이미지 인코딩·업로드, Presigned URL 요청을 중단한다.
+- `configVersion` 또는 세션/활성 상태가 바뀌면 집계 창, 추론 FPS, 임계값과 이벤트 설정을 즉시 적용한다.
+- 밀도는 `headcount / monitoredAreaM2`로 계산하고 단계 임계값은 BE 응답만 사용한다.
+- 혼잡 진입/상승은 기본 3프레임, 정상 복귀는 5프레임 연속 조건이며 단계 상승은 cooldown과 무관하게 즉시 보낸다.
+- 모든 시간 필드는 Unix timestamp 밀리초다.
 
-기존 POC는 한 파일에서 YOLO, 첫 프레임 ROI 선택, bounding-box **center**, 임시 `cameraId/zoneId/personCount/congested` 전송을 수행했다. 새 구조는 입력·검출·ROI 저장·집계·reporter·오프라인 큐를 분리하며, 발 위치에 가까워 구역 진입 판단에 더 적합한 **bottom-center**를 기본으로 쓴다. ROI 선 위의 점도 내부다.
+5초 관측값의 `avgHeadcount`는 정확도를 위해 실수로 보낸다. `peakHeadcount`와 `sampleCount`는 정수다. 이미지 업로드가 실패해도 `monitoringImageKey: null`로 관측값은 전송한다.
 
-## 구조
-
-```text
-src/raspberry_pi_congestion/
-  detectors/              PersonDetector, fake/ultralytics/onnx, 미완성 Hailo adapter
-  video_source.py         FileVideoSource, RtspVideoSource
-  roi_provider.py         대화형 4점 선택, 정규화 JSON 저장/로드
-  roi_counter.py          bottom-center polygon 판정
-  window_aggregator.py    5초 인원 집계와 half-up 정수 평균
-  api_client.py           logging/Spring reporter와 설정 가능한 인증 헤더
-  offline_queue.py        단일 observation SQLite 큐
-  app.py                  파이프라인과 자원 정리
-  main.py                 실행 모드 진입점
-config/roi/               CCTV별 정규화 ROI JSON
-models/                   로컬 추론 모델(파일은 Git 제외)
-sample_videos/            로컬 테스트 영상(파일은 Git 제외)
+```json
+{
+  "eventId": "observation-uuid",
+  "trainingSessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "cctvCode": "CCTV_001",
+  "avgHeadcount": 4.75,
+  "peakHeadcount": 8,
+  "sampleCount": 25,
+  "windowStart": 1786500000000,
+  "windowEnd": 1786500005000,
+  "capturedAt": 1786500005000,
+  "monitoringImageKey": null,
+  "configVersion": 1
+}
 ```
 
-Hailo adapter는 설치된 HailoRT 버전, 대상 Hailo 칩, HEF tensor와 후처리가 실기기에서 검증되기 전까지 의도적으로 `HailoAdapterNotImplemented`를 발생시킨다. 동작 완료 상태가 아니다. 일반 프레임과 모델을 EC2에 저장하지 않으며 S3 업로드도 아직 구현하지 않는다. 향후 이벤트 스냅샷이 필요하면 observation의 `s3ImageKey`를 채우는 업로더를 파이프라인 경계에 추가한다.
+혼잡 이벤트에는 `edgeId`와 `eventImageKey`를 넣지 않는다. 이벤트 POST와 이미지 업로드를 병렬 처리한 뒤, 둘 다 성공하면 `PATCH /api/v1/device/congestion-events/{eventId}/image`로 BE가 발급한 `objectKey`를 연결한다.
 
-## 설치와 PyCharm
+## 설치 및 실행
 
-PyCharm에서 이 디렉터리를 프로젝트로 열고 Python 3.9 이상 venv를 만든다.
+Python 3.9 이상 가상환경에서 다음을 실행한다.
 
 ```powershell
 pip install -r requirements-dev.txt
@@ -38,85 +43,42 @@ pip install -e .
 pytest -q
 ```
 
-Run Configuration은 module `raspberry_pi_congestion.main`, parameters는 아래 모드 중 하나, working directory는 이 디렉터리로 둔다. `.env.example`을 `.env`로 복사한 뒤 자리표시자만 로컬 값으로 바꾼다. `.env`는 커밋하지 않는다.
-
-## ROI 설정과 실행
-
-GUI가 있는 개발 PC에서 영상 첫 프레임의 네 점을 순서대로 클릭한다. 좌표는 0~1 JSON으로 저장되며 운영 Raspberry Pi는 이 파일만 읽으므로 GUI가 필요 없다. Esc는 취소다.
+`.env.example`을 `.env`로 복사하고 실제 값으로 바꾼다. 토큰과 RTSP 비밀번호는 로그에 출력하지 않으며 `.env`는 커밋하지 않는다.
 
 ```powershell
-$env:VIDEO_SOURCE='{VIDEO_FILE_PATH}'
-$env:CCTV_CODE='{CCTV_CODE}'
-python -m raspberry_pi_congestion.main setup-roi
-```
-
-`ROI_CONFIG_PATH`를 생략하면 `CCTV_CODE=CCTV_TEST_01` 기준으로
-`.\config\roi\CCTV_TEST_01.json`에 저장한다. 여러 CCTV는 파일을 각각 분리한다.
-
-로컬 영상 dry-run은 서버로 보내지 않고 안전한 payload 로그만 남긴다.
-
-```powershell
-$env:VIDEO_SOURCE='{VIDEO_FILE_PATH}'
-$env:CCTV_CODE='{CCTV_CODE}'
-$env:DETECTOR_BACKEND='ultralytics'
-$env:MODEL_PATH='.\models\yolov8n.pt'
-python -m raspberry_pi_congestion.main dry-run
-```
-
-`MODEL_PATH`는 실행 시점의 working directory 기준이다. 위 명령처럼 프로젝트 루트에서
-실행하고 모델이 `models` 폴더에 있다면 `.\models\yolov8n.pt`가 정확하다. `MODEL_PATH`를
-생략한 Ultralytics 모드도 기본적으로 `.\models\yolov8n.pt`를 찾으며, 파일이 없으면
-Ultralytics가 다운로드를 시도할 수 있다. 모델 파일과 `models/`는 Git에서 제외된다.
-
-파일을 서버로 전송하려면 마지막 인자를 `file`로 바꾸고 서버 변수를 설정한다. RTSP는 `VIDEO_SOURCE='{RTSP_URL}'`로 설정하고 `rtsp` 모드를 사용한다. URL에 포함된 비밀번호와 인증 토큰은 로그에 출력하지 않는다.
-
-```powershell
-$env:SAFEROUTE_SERVER_BASE_URL='{SERVER_BASE_URL}'
-$env:CONGESTION_OBSERVATION_PATH='{API_PATH}'
-$env:DEVICE_AUTH_TOKEN='{DEVICE_AUTH_TOKEN}'
+$env:CCTV_CODE='CCTV_001'
+$env:DEVICE_AUTH_TOKEN='{CCTV_001 전용 토큰}'
+$env:SAFEROUTE_SERVER_BASE_URL='https://{BE_HOST}'
+$env:VIDEO_SOURCE='{VIDEO_FILE_OR_RTSP_URL}'
 python -m raspberry_pi_congestion.main file
+# 또는
 python -m raspberry_pi_congestion.main rtsp
 ```
 
-`test` 모드는 `DETECTOR_BACKEND=fake`와 함께 모델 없이 파이프라인을 확인할 때 사용한다.
-
-## 임시 수신 서버
-
-최종 Spring API가 구현되기 전에는 `LoggingCongestionReporter` 또는 개발용 Flask 수신기로 확인한다. 이 mock은 Spring API 구현 또는 실제 연동 성공을 의미하지 않는다.
+ROI는 CCTV별 파일로 저장한다. `ROI_CONFIG_PATH`를 생략하면 `./config/roi/CCTV_001.json`처럼 장치 코드 기반 경로를 사용한다.
 
 ```powershell
-pip install flask
-python scripts/mock_server.py
-$env:SAFEROUTE_SERVER_BASE_URL='http://127.0.0.1:8080'
-$env:CONGESTION_OBSERVATION_PATH='/api/v1/device/congestion-observations'
-python -m raspberry_pi_congestion.main file
+python -m raspberry_pi_congestion.main setup-roi
 ```
 
-인증 헤더 명칭은 미확정이다. `AUTH_HEADER_NAME`과 `AUTH_HEADER_PREFIX`로 조정하며 기본값은 `Authorization: Bearer ...`다.
+서버 없이 검출/집계를 확인하려면 `dry-run` 또는 `test` 모드를 사용한다. 이 두 모드만 로컬 기본 설정을 사용하며 운영 모드는 반드시 BE 설정을 조회한다.
 
-## 최종 요청
+## 재시도와 로컬 큐
 
-```json
-{
-  "eventId": "{UUID}",
-  "cctvCode": "{CCTV_CODE}",
-  "avgHeadcount": 5,
-  "peakHeadcount": 8,
-  "sampleCount": 25,
-  "windowStart": 1786500000000,
-  "windowEnd": 1786500005000,
-  "capturedAt": 1786500005000,
-  "s3ImageKey": null
-}
+200/201을 포함한 모든 2xx는 성공이다. 5xx, timeout, 429는 동일한 `eventId`, 세션, 시간, 버전, payload로 제한 재시도한 뒤 SQLite 큐에 보관한다. 400/401/403 같은 영구 오류는 큐에 넣지 않는다. 이벤트 이미지 연결의 404/409는 이벤트 생성 순서를 고려해 재시도한다. Presigned URL은 큐에 저장하거나 재사용하지 않는다.
+
+SQLite 큐는 관측값, 혼잡 이벤트, 이벤트 이미지 연결 작업을 구분해서 저장한다. `trainingActive=false`일 때 종료 세션의 기존 큐를 자동 전송하지 않으며, 최종 처리 정책은 BE와 별도 합의가 필요하다.
+
+## 주요 구조
+
+```text
+src/raspberry_pi_congestion/
+  api_client.py          설정/관측/이벤트/Presigned URL/이미지 연결 API
+  app.py                 polling, 추론, 병렬 이벤트·이미지 처리, 큐 재전송
+  event_detector.py      연속 프레임과 cooldown 상태 머신
+  models.py              최종 BE DTO와 설정 모델
+  offline_queue.py       작업 유형별 SQLite 실패 큐
+  window_aggregator.py   실수 평균·최대·성공 프레임 수 집계
 ```
 
-평균은 `floor(value + 0.5)` half-up 정수이며 빈 window는 전송하지 않는다. HTTP는 2xx를 성공으로 보고 400/401/403/404는 재시도하지 않는다. 429, 5xx, 네트워크 오류만 지수 backoff로 제한 재시도한다. 실패 observation은 최대 1,000건/24시간의 SQLite 큐에 보관하고 기본 30초 간격으로만 flush한다.
-
-## Spring BE에 아직 필요한 것
-
-- `POST /api/v1/device/congestion-observations` (경로 최종 합의 필요)
-- 위 JSON과 정확히 일치하는 Integer `avgHeadcount`/`peakHeadcount` 요청 DTO
-- `eventId` 기반 멱등 처리
-- 디바이스 인증 헤더 방식의 최종 합의와 필터
-- `cctvCode` 조회 실패 및 DTO 검증 오류 응답 정책
-- GridCell 면적 기반 density/서울시 단계/MapEdge 이후 처리 구현
+Hailo adapter는 실기기 HEF tensor와 후처리가 검증되기 전까지 의도적으로 미구현 오류를 낸다.

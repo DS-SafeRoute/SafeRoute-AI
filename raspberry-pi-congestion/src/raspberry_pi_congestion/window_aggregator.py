@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import time
 from typing import Callable, Optional
 
@@ -32,12 +31,12 @@ class WindowAggregator:
             self._reset()
             return None
         peak = max(self._counts)
-        average = math.floor(sum(self._counts) / len(self._counts) + 0.5)
+        average = sum(self._counts) / len(self._counts)
         summary = WindowSummary(
             window_start_ms=self._window_start_ms if self._window_start_ms is not None else now_ms,
             window_end_ms=now_ms,
             sample_count=len(self._counts),
-            avg_headcount=min(average, peak),
+            avg_headcount=min(float(average), peak),
             peak_headcount=peak,
         )
         self._reset()
@@ -47,3 +46,9 @@ class WindowAggregator:
         self._counts.clear()
         self._window_start_ms = None
         self._started_monotonic = self._clock()
+
+    def reconfigure(self, window_sec: float) -> None:
+        if window_sec <= 0:
+            raise ValueError("window_sec must be positive")
+        self.window_sec = window_sec
+        self._reset()
