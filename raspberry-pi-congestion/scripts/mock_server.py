@@ -24,7 +24,9 @@ def config():
 def presigned():
     body = request.get_json()
     key = f"training/{body['trainingSessionId']}/{body['imageType'].lower()}/{body['cctvCode']}/{body['referenceId']}.jpg"
-    return jsonify({"objectKey": key, "uploadUrl": f"http://127.0.0.1:8080/upload/{uuid4()}", "expiresAt": int(time.time() * 1000) + 60000})
+    # Pi가 요청에 사용한 호스트를 그대로 반환해야 다른 장치에서도 mock 업로드 주소에 도달할 수 있다.
+    upload_url = f"{request.host_url.rstrip('/')}/upload/{uuid4()}"
+    return jsonify({"objectKey": key, "uploadUrl": upload_url, "expiresAt": int(time.time() * 1000) + 60000})
 
 
 @app.put("/upload/<upload_id>")
@@ -51,4 +53,4 @@ def event_image(event_id):
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=8080)
+    app.run(host="0.0.0.0", port=8080)

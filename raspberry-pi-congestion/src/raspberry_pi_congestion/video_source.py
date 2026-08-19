@@ -28,8 +28,8 @@ class FileVideoSource(VideoSource):
                  fallback_fps: float = 30.0, capture_factory: Optional[Callable] = None,
                  monotonic: Callable[[], float] = time.monotonic,
                  sleeper: Callable[[float], None] = time.sleep) -> None:
-        if fallback_fps <= 0:
-            raise ValueError("fallback_fps must be positive")
+        if not math.isfinite(fallback_fps) or fallback_fps <= 0:
+            raise ValueError("fallback_fps must be finite and positive")
         self.path = path
         self.loop = loop
         self.realtime = realtime

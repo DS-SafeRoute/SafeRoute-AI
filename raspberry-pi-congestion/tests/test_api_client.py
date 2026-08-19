@@ -1,12 +1,16 @@
 import pytest
 
 from raspberry_pi_congestion.api_client import AuthHeaderProvider, SafeRouteDeviceClient, SpringCongestionReporter
-from raspberry_pi_congestion.models import CongestionObservation
+from raspberry_pi_congestion.models import CongestionObservation, DeviceCongestionConfig
 
 
 class Response:
-    def __init__(self, status, body=None): self.status_code = status; self._body = body or {}
-    def json(self): return self._body
+    def __init__(self, status, body=None):
+        self.status_code = status
+        self._body = body or {}
+
+    def json(self):
+        return self._body
 
 
 def observation():
@@ -50,7 +54,8 @@ def test_retryable_failures_are_bounded_and_payload_is_stable(outcomes):
     def request(*args, **kwargs):
         calls.append(kwargs["json"].copy())
         value = next(values)
-        if isinstance(value, Exception): raise value
+        if isinstance(value, Exception):
+            raise value
         return Response(value)
     reporter = SpringCongestionReporter("http://server", max_retries=1, request=request, sleeper=lambda _: None)
     assert reporter.report(observation())
@@ -77,3 +82,17 @@ def test_fetches_and_validates_backend_config():
     assert config and config.training_session_id == "550e8400-e29b-41d4-a716-446655440000" and config.config_version == 3
     assert calls[0][1]["params"] == {"cctvCode": "CCTV_001"}
     assert calls[0][1]["headers"]["Authorization"] == "Bearer token"
+
+
+@pytest.mark.parametrize("field", ["snapshotIntervalSec", "targetInferenceFps"])
+def test_inactive_config_rejects_non_positive_runtime_values(field):
+    payload = {
+        "trainingActive": False,
+        "trainingSessionId": None,
+        "cctvCode": "CCTV_001",
+        "configVersion": 1,
+        field: 0,
+    }
+
+    with pytest.raises(ValueError, match="snapshot interval and target FPS"):
+        DeviceCongestionConfig.from_json(payload)

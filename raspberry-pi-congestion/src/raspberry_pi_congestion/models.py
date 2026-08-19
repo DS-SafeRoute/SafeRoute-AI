@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import math
+import uuid
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
-import uuid
 
 
 @dataclass(frozen=True)
@@ -170,11 +171,14 @@ class DeviceCongestionConfig:
             raise ValueError("configVersion must be positive")
         if active and (config.monitored_area_m2 is None or config.monitored_area_m2 <= 0 or config.thresholds is None or config.event_detection is None):
             raise ValueError("active training response is missing required congestion settings")
-        if active and (config.snapshot_interval_sec <= 0 or config.target_inference_fps <= 0):
+        if (not math.isfinite(config.snapshot_interval_sec) or config.snapshot_interval_sec <= 0
+                or not math.isfinite(config.target_inference_fps) or config.target_inference_fps <= 0):
             raise ValueError("snapshot interval and target FPS must be positive")
-        if active and (config.event_detection.required_consecutive_frames <= 0
-                       or config.event_detection.recovery_consecutive_frames <= 0
-                       or config.event_detection.cooldown_sec < 0):
+        if config.event_detection is not None and (
+                config.event_detection.required_consecutive_frames <= 0
+                or config.event_detection.recovery_consecutive_frames <= 0
+                or not math.isfinite(config.event_detection.cooldown_sec)
+                or config.event_detection.cooldown_sec < 0):
             raise ValueError("event detection settings are invalid")
         return config
 

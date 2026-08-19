@@ -1,19 +1,41 @@
+import math
+
+import pytest
+
 from raspberry_pi_congestion.video_source import FileVideoSource, RtspVideoSource
 
 
 class Capture:
     def __init__(self, frames=(), opened=True, fps=30.0):
-        self.frames = list(frames); self.opened = opened; self.released = False; self.fps = fps
-    def isOpened(self): return self.opened
-    def read(self): return (True, self.frames.pop(0)) if self.frames else (False, None)
-    def get(self, _): return self.fps
-    def release(self): self.released = True
+        self.frames = list(frames)
+        self.opened = opened
+        self.released = False
+        self.fps = fps
+
+    def isOpened(self):
+        return self.opened
+
+    def read(self):
+        return (True, self.frames.pop(0)) if self.frames else (False, None)
+
+    def get(self, _):
+        return self.fps
+
+    def release(self):
+        self.released = True
 
 
 class Clock:
-    def __init__(self): self.value = 0.0; self.sleeps = []
-    def __call__(self): return self.value
-    def sleep(self, seconds): self.sleeps.append(seconds); self.value += seconds
+    def __init__(self):
+        self.value = 0.0
+        self.sleeps = []
+
+    def __call__(self):
+        return self.value
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.value += seconds
 
 
 def test_file_eof_stops_and_releases():
@@ -48,6 +70,12 @@ def test_file_uses_fallback_when_source_fps_is_invalid():
     assert list(source.frames()) == ["first", "second"]
     assert clock.sleeps == [0.1]
     source.close()
+
+
+@pytest.mark.parametrize("fallback_fps", [math.nan, math.inf, -math.inf, 0, -1])
+def test_file_rejects_non_finite_or_non_positive_fallback_fps(fallback_fps):
+    with pytest.raises(ValueError, match="finite and positive"):
+        FileVideoSource("video.mp4", fallback_fps=fallback_fps)
 
 
 def test_file_loop_reopens_capture_and_resets_pacing():

@@ -130,7 +130,15 @@ class CongestionPipeline:
             image_key = upload_future.result()
         retryable = not hasattr(client, "should_queue_failure") or client.should_queue_failure(event.event_id)
         if not reported and retryable and self.offline_queue is not None:
-            self.offline_queue.enqueue(event.event_id, event.to_json(), "event")
+            queued_payload = {"eventPayload": event.to_json()}
+            if image_key:
+                # 이벤트 POST만 재시도하면 이미 업로드된 S3 객체를 다시 연결할 방법이 없다.
+                # 업로드 결과를 이벤트 작업과 함께 보존하고 POST 성공 뒤 PATCH 작업으로 넘긴다.
+                queued_payload.update({
+                    "eventImageKey": image_key,
+                    "uploadedAt": self._epoch_ms(),
+                })
+            self.offline_queue.enqueue(event.event_id, queued_payload, "event")
         if reported and image_key:
             attached = client.attach_event_image(event.event_id, image_key, self._epoch_ms())
             retryable_image = not hasattr(client, "should_queue_failure") or client.should_queue_failure(f"image:{event.event_id}")
@@ -179,11 +187,9 @@ class CongestionPipeline:
         session_changed = previous is None or previous.training_session_id != new_config.training_session_id
         if (previous is None or previous.config_version != new_config.config_version
                 or previous.training_active != new_config.training_active or session_changed):
-            if new_config.training_active:
-                self.aggregator.reconfigure(new_config.snapshot_interval_sec)
-                self.target_fps = new_config.target_inference_fps
-            else:
-                self.aggregator.reconfigure(previous.snapshot_interval_sec if previous else 5.0)
+            # 비활성 상태에서는 사용하지 않더라도 최신 값을 저장해 이전 세션 설정이 남지 않게 한다.
+            self.aggregator.reconfigure(new_config.snapshot_interval_sec)
+            self.target_fps = new_config.target_inference_fps
             logger.info("Applied congestion config version %d", new_config.config_version)
         if session_changed or not new_config.training_active:
             self._event_detector.reset()
@@ -194,12 +200,23 @@ class CongestionPipeline:
         self._last_queue_flush = now
         for item in self.offline_queue.peek_oldest(limit=5):
             if item.operation == "event" and hasattr(self.reporter, "report_event_json"):
-                success = self.reporter.report_event_json(item.payload)
+                event_payload = item.payload.get("eventPayload", item.payload)
+                success = self.reporter.report_event_json(event_payload)
             elif item.operation == "event_image" and hasattr(self.reporter, "attach_event_image"):
                 success = self.reporter.attach_event_image(item.payload["eventId"], item.payload["eventImageKey"], item.payload["uploadedAt"])
             else:
                 success = self.reporter.report_json(item.payload)
             if success:
+                if item.operation == "event" and item.payload.get("eventImageKey"):
+                    # 이벤트가 실제로 저장된 뒤에만 이미지 연결 작업을 큐에 추가한다.
+                    image_payload = {
+                        "eventId": item.event_id,
+                        "eventImageKey": item.payload["eventImageKey"],
+                        "uploadedAt": item.payload["uploadedAt"],
+                    }
+                    self.offline_queue.enqueue(
+                        f"image:{item.event_id}", image_payload, "event_image"
+                    )
                 self.offline_queue.mark_success(item.id)
             else:
                 retryable = not hasattr(self.reporter, "should_queue_failure") or self.reporter.should_queue_failure(item.event_id)
