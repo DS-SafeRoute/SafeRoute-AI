@@ -22,6 +22,8 @@ class AppConfig:
     window_sec: float
     server_base_url: Optional[str]
     observation_path: str
+    config_poll_active_sec: float
+    config_poll_inactive_sec: float
     device_auth_token: Optional[str]
     auth_header_name: str
     auth_header_prefix: str
@@ -49,8 +51,12 @@ class AppConfig:
             return e.get(key, str(default)).lower() in {"1", "true", "yes", "on"}
         server = e.get("SAFEROUTE_SERVER_BASE_URL")
         cctv_code = required("CCTV_CODE")
+        if cctv_code not in {"CCTV_001", "CCTV_002"} and selected_mode not in {"dry-run", "test", "setup-roi"}:
+            raise ConfigError("CCTV_CODE must be CCTV_001 or CCTV_002")
         if selected_mode in {"file", "rtsp"} and not server:
             raise ConfigError("SAFEROUTE_SERVER_BASE_URL is required for server reporting modes")
+        if selected_mode in {"file", "rtsp"} and not e.get("DEVICE_AUTH_TOKEN"):
+            raise ConfigError("DEVICE_AUTH_TOKEN is required for server reporting modes")
         return AppConfig(
             mode=selected_mode, video_source=required("VIDEO_SOURCE"),
             roi_config_path=e.get("ROI_CONFIG_PATH", f"./config/roi/{cctv_code}.json"), cctv_code=cctv_code,
@@ -58,6 +64,8 @@ class AppConfig:
             detector_conf_threshold=float(e.get("DETECTOR_CONF_THRESHOLD", "0.4")),
             target_inference_fps=float(e.get("TARGET_INFERENCE_FPS", "5")), window_sec=float(e.get("WINDOW_SEC", "5")),
             server_base_url=server, observation_path=e.get("CONGESTION_OBSERVATION_PATH", "/api/v1/device/congestion-observations"),
+            config_poll_active_sec=float(e.get("CONFIG_POLL_ACTIVE_SEC", "5")),
+            config_poll_inactive_sec=float(e.get("CONFIG_POLL_INACTIVE_SEC", "15")),
             device_auth_token=e.get("DEVICE_AUTH_TOKEN"), auth_header_name=e.get("AUTH_HEADER_NAME", "Authorization"),
             auth_header_prefix=e.get("AUTH_HEADER_PREFIX", "Bearer"), request_timeout_sec=float(e.get("REQUEST_TIMEOUT_SEC", "5")),
             max_http_retries=int(e.get("MAX_HTTP_RETRIES", "2")), offline_queue_db_path=e.get("OFFLINE_QUEUE_DB_PATH", "./offline_queue.sqlite3"),

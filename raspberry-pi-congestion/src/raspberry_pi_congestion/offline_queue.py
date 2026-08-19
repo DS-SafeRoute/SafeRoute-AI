@@ -13,6 +13,7 @@ class QueuedObservation:
     payload: dict
     created_at: float
     attempts: int
+    operation: str = "observation"
 
 
 class OfflineQueue:
@@ -21,11 +22,14 @@ class OfflineQueue:
         self.max_items = max_items
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.execute("CREATE TABLE IF NOT EXISTS observations (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, created_at REAL NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)")
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(observations)")}
+        if "operation" not in columns:
+            self._conn.execute("ALTER TABLE observations ADD COLUMN operation TEXT NOT NULL DEFAULT 'observation'")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_created ON observations(created_at)")
         self._conn.commit()
 
-    def enqueue(self, event_id: str, payload: dict) -> None:
-        self._conn.execute("INSERT OR IGNORE INTO observations(event_id,payload,created_at) VALUES(?,?,?)", (event_id, json.dumps(payload), time.time()))
+    def enqueue(self, event_id: str, payload: dict, operation: str = "observation") -> None:
+        self._conn.execute("INSERT OR IGNORE INTO observations(event_id,payload,created_at,operation) VALUES(?,?,?,?)", (event_id, json.dumps(payload), time.time(), operation))
         self._conn.commit()
         overflow = self.size() - self.max_items
         if overflow > 0:
@@ -36,8 +40,8 @@ class OfflineQueue:
         cutoff = time.time() - self.max_age_sec
         self._conn.execute("DELETE FROM observations WHERE created_at < ?", (cutoff,))
         self._conn.commit()
-        rows = self._conn.execute("SELECT id,event_id,payload,created_at,attempts FROM observations ORDER BY created_at LIMIT ?", (limit,)).fetchall()
-        return [QueuedObservation(r[0], r[1], json.loads(r[2]), r[3], r[4]) for r in rows]
+        rows = self._conn.execute("SELECT id,event_id,payload,created_at,attempts,operation FROM observations ORDER BY created_at LIMIT ?", (limit,)).fetchall()
+        return [QueuedObservation(r[0], r[1], json.loads(r[2]), r[3], r[4], r[5]) for r in rows]
 
     def mark_success(self, item_id: int) -> None:
         self._conn.execute("DELETE FROM observations WHERE id=?", (item_id,))

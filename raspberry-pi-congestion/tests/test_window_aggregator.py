@@ -17,11 +17,11 @@ def test_five_second_window_average_peak_and_sample_count():
     assert (result.avg_headcount, result.peak_headcount) == (4, 6)
 
 
-def test_half_up_not_bankers_rounding():
+def test_fractional_average_is_preserved():
     agg = WindowAggregator()
     agg.add_sample(2, 1000)
     agg.add_sample(3, 2000)
-    assert agg.flush(6000).avg_headcount == 3
+    assert agg.flush(6000).avg_headcount == 2.5
 
 
 def test_empty_window_not_emitted_and_average_never_exceeds_peak():

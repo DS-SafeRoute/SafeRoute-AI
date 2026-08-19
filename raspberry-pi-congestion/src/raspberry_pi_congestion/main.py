@@ -4,7 +4,7 @@ import argparse
 import logging
 import sys
 
-from .api_client import AuthHeaderProvider, LoggingCongestionReporter, SpringCongestionReporter
+from .api_client import AuthHeaderProvider, LoggingCongestionReporter, SafeRouteDeviceClient
 from .app import CongestionPipeline
 from .config import AppConfig, ConfigError
 from .detectors import create_detector
@@ -42,11 +42,12 @@ def main(argv=None) -> int:
     if config.mode == "setup-roi":
         _setup_roi(config)
         return 0
-    reporter = LoggingCongestionReporter() if config.mode in {"dry-run", "test"} else SpringCongestionReporter(
-        config.server_base_url or "", config.observation_path,
+    device_client = None if config.mode in {"dry-run", "test"} else SafeRouteDeviceClient(
+        config.server_base_url or "",
         AuthHeaderProvider(config.device_auth_token, config.auth_header_name, config.auth_header_prefix),
         config.request_timeout_sec, config.max_http_retries,
     )
+    reporter = LoggingCongestionReporter() if device_client is None else device_client
     source = create_video_source(config.video_source, file_loop=config.video_loop,
                                  max_reconnects=config.rtsp_max_reconnects,
                                  base_delay_sec=config.rtsp_reconnect_base_delay_sec) if config.mode == "rtsp" else FileVideoSource(config.video_source, config.video_loop)
@@ -58,7 +59,10 @@ def main(argv=None) -> int:
     queue = None if config.mode in {"dry-run", "test"} else OfflineQueue(config.offline_queue_db_path, config.offline_queue_max_age_sec, config.offline_queue_max_items)
     pipeline = CongestionPipeline(source, detector, RoiCounter(JsonRoiProvider(config.roi_config_path).load()),
                                   WindowAggregator(config.window_sec), reporter, config.cctv_code, queue,
-                                  config.target_inference_fps, config.offline_flush_interval_sec)
+                                  config.target_inference_fps, config.offline_flush_interval_sec,
+                                  config_provider=device_client,
+                                  config_poll_active_sec=config.config_poll_active_sec,
+                                  config_poll_inactive_sec=config.config_poll_inactive_sec)
     pipeline.run()
     return 0
 
