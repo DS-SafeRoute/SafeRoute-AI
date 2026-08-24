@@ -20,12 +20,14 @@ class Clock:
 
 
 class Source:
-    def __init__(self, frame):
+    def __init__(self, frame, count=1):
         self.frame = frame
+        self.count = count
         self.closed = False
 
     def frames(self):
-        yield self.frame
+        for _ in range(self.count):
+            yield self.frame
 
     def close(self):
         self.closed = True
@@ -38,6 +40,20 @@ class Reporter(CongestionReporter):
     def report(self, item):
         self.items.append(item)
         return True
+
+
+class Preview:
+    def __init__(self, keep_running=True):
+        self.keep_running = keep_running
+        self.calls = []
+        self.closed = False
+
+    def show(self, frame, detections, inside_detections):
+        self.calls.append((frame, list(detections), list(inside_detections)))
+        return self.keep_running
+
+    def close(self):
+        self.closed = True
 
 
 class Capture:
@@ -107,3 +123,31 @@ def test_realtime_file_pipeline_emits_five_second_window():
     assert reporter.items[0].sample_count == 26
     assert reporter.items[0].window_end - reporter.items[0].window_start == 5_000
     assert capture.released
+
+
+def test_preview_receives_detections_and_can_stop_pipeline():
+    clock = Clock()
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    source = Source(frame, count=3)
+    detector = FakePersonDetector([Detection(30, 20, 50, 60, .9)])
+    preview = Preview(keep_running=False)
+    pipeline = CongestionPipeline(
+        source,
+        detector,
+        RoiCounter([Point(0, 0), Point(1, 0), Point(1, 1), Point(0, 1)]),
+        WindowAggregator(5, clock),
+        Reporter(),
+        "CCTV_TEST",
+        target_fps=0,
+        monotonic=clock,
+        epoch_ms=lambda: 1_000,
+        preview=preview,
+    )
+
+    pipeline.run()
+
+    assert detector.call_count == 1
+    assert len(preview.calls) == 1
+    assert len(preview.calls[0][1]) == 1
+    assert len(preview.calls[0][2]) == 1
+    assert preview.closed

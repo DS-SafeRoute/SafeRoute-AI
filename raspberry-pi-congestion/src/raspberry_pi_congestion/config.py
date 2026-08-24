@@ -39,6 +39,7 @@ class AppConfig:
     video_loop: bool
     file_realtime: bool
     file_fallback_fps: float
+    show_preview: bool
     log_level: str
 
     @staticmethod
@@ -87,5 +88,6 @@ class AppConfig:
             offline_flush_interval_sec=float(e.get("OFFLINE_FLUSH_INTERVAL_SEC", "30")), rtsp_max_reconnects=int(e.get("RTSP_MAX_RECONNECTS", "5")),
             rtsp_reconnect_base_delay_sec=float(e.get("RTSP_RECONNECT_BASE_DELAY_SEC", "1")), video_loop=boolean("VIDEO_LOOP", False),
             file_realtime=boolean("FILE_REALTIME", True), file_fallback_fps=file_fallback_fps,
+            show_preview=boolean("SHOW_PREVIEW", False),
             log_level=e.get("LOG_LEVEL", "INFO"),
         )

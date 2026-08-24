@@ -9,6 +9,7 @@ from .app import CongestionPipeline
 from .config import AppConfig, ConfigError
 from .detectors import create_detector
 from .offline_queue import OfflineQueue
+from .preview import OpenCvPreview
 from .roi_counter import RoiCounter
 from .roi_provider import InteractiveRoiSelector, JsonRoiProvider
 from .video_source import FileVideoSource, create_video_source
@@ -62,12 +63,15 @@ def main(argv=None) -> int:
     else:
         detector = create_detector(config)
     queue = None if config.mode in {"dry-run", "test"} else OfflineQueue(config.offline_queue_db_path, config.offline_queue_max_age_sec, config.offline_queue_max_items)
-    pipeline = CongestionPipeline(source, detector, RoiCounter(JsonRoiProvider(config.roi_config_path).load()),
+    roi = JsonRoiProvider(config.roi_config_path).load()
+    preview = OpenCvPreview(roi) if config.show_preview else None
+    pipeline = CongestionPipeline(source, detector, RoiCounter(roi),
                                   WindowAggregator(config.window_sec), reporter, config.cctv_code, queue,
                                   config.target_inference_fps, config.offline_flush_interval_sec,
                                   config_provider=device_client,
                                   config_poll_active_sec=config.config_poll_active_sec,
-                                  config_poll_inactive_sec=config.config_poll_inactive_sec)
+                                  config_poll_inactive_sec=config.config_poll_inactive_sec,
+                                  preview=preview)
     pipeline.run()
     return 0
 

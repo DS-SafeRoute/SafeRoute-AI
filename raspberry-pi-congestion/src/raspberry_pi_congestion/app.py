@@ -27,7 +27,8 @@ class CongestionPipeline:
                  monotonic: Callable[[], float] = time.monotonic,
                  epoch_ms: Callable[[], int] = lambda: int(time.time() * 1000),
                  config_provider=None, config_poll_active_sec: float = 5.0,
-                 config_poll_inactive_sec: float = 15.0) -> None:
+                 config_poll_inactive_sec: float = 15.0,
+                 preview=None) -> None:
         self.video_source = video_source
         self.detector = detector
         self.roi_counter = roi_counter
@@ -40,6 +41,7 @@ class CongestionPipeline:
         self.flush_interval_sec = flush_interval_sec
         self.config_poll_active_sec = config_poll_active_sec
         self.config_poll_inactive_sec = config_poll_inactive_sec
+        self.preview = preview
         self._monotonic = monotonic
         self._epoch_ms = epoch_ms
         self._last_inference = float("-inf")
@@ -47,6 +49,7 @@ class CongestionPipeline:
         self._last_config_poll = float("-inf")
         self._last_inference_error_log = float("-inf")
         self._closed = False
+        self._preview_stop_requested = False
         self._event_detector = CongestionEventDetector()
         # Only local/test pipelines use this fallback. Server modes always poll BE.
         self._config = None if config_provider else DeviceCongestionConfig(
@@ -65,6 +68,8 @@ class CongestionPipeline:
                     continue
                 self._last_inference = now
                 self.process_frame(frame)
+                if self._preview_stop_requested:
+                    break
                 self._maybe_flush_queue(now)
         finally:
             self.close()
@@ -82,7 +87,14 @@ class CongestionPipeline:
                 logger.error("Person inference failed (further errors suppressed for 10s): %s", type(exc).__name__)
             return None
         height, width = frame.shape[:2]
-        count = self.roi_counter.count_inside(detections, width, height)
+        inside_detections = self.roi_counter.filter_inside(detections, width, height)
+        count = len(inside_detections)
+        if self.preview is not None:
+            self._preview_stop_requested = not self.preview.show(
+                frame,
+                detections,
+                inside_detections,
+            )
         now_ms = self._epoch_ms()
         self._process_local_event(frame, count, now_ms, config)
         self.aggregator.add_sample(count, now_ms)
@@ -233,5 +245,7 @@ class CongestionPipeline:
         self._closed = True
         self.video_source.close()
         self.detector.close()
+        if self.preview is not None:
+            self.preview.close()
         if self.offline_queue is not None:
             self.offline_queue.close()

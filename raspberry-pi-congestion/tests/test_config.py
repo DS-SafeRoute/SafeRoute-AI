@@ -16,6 +16,20 @@ def test_default_paths_follow_project_directory_structure():
     assert config.model_path is None
     assert config.file_realtime
     assert config.file_fallback_fps == 30
+    assert not config.show_preview
+
+
+def test_show_preview_can_be_enabled_from_env():
+    config = AppConfig.from_env(
+        {
+            "RUN_MODE": "dry-run",
+            "VIDEO_SOURCE": "./sample_videos/test.mp4",
+            "CCTV_CODE": "CCTV_001",
+            "SHOW_PREVIEW": "true",
+        }
+    )
+
+    assert config.show_preview
 
 
 @pytest.mark.parametrize("key", ["CONFIG_POLL_ACTIVE_SEC", "CONFIG_POLL_INACTIVE_SEC"])

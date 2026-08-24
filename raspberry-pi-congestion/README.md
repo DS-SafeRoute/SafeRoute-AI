@@ -55,6 +55,11 @@ python -m raspberry_pi_congestion.main file
 python -m raspberry_pi_congestion.main rtsp
 ```
 
+개발 PC에서 추론 화면을 확인하려면 `SHOW_PREVIEW=true`를 설정한다. 노란색은 ROI,
+초록색 박스는 ROI 안에서 집계된 사람, 주황색 박스는 ROI 밖 사람이다. 창에서 `Q` 또는
+`Esc`를 누르면 파이프라인과 미리보기 창이 함께 종료된다. 기본값은 `false`이며 전송용
+JPEG에는 오버레이가 포함되지 않는다.
+
 ROI는 CCTV별 파일로 저장한다. `ROI_CONFIG_PATH`를 생략하면 `./config/roi/CCTV_001.json`처럼 장치 코드 기반 경로를 사용한다.
 
 ```powershell
