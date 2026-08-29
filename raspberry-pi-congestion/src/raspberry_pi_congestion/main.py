@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import threading
 
 from .api_client import AuthHeaderProvider, LoggingCongestionReporter, SafeRouteDeviceClient
 from .app import CongestionPipeline
@@ -10,10 +11,13 @@ from .config import AppConfig, ConfigError
 from .detectors import create_detector
 from .offline_queue import OfflineQueue
 from .preview import OpenCvPreview
+from .relay import LightCommandExecutor, RelayController, RelayControllerError
 from .roi_counter import RoiCounter
 from .roi_provider import InteractiveRoiSelector, JsonRoiProvider
 from .video_source import FileVideoSource, create_video_source
 from .window_aggregator import WindowAggregator
+
+logger = logging.getLogger(__name__)
 
 
 def _setup_roi(config: AppConfig) -> None:
@@ -23,6 +27,30 @@ def _setup_roi(config: AppConfig) -> None:
         JsonRoiProvider(config.roi_config_path).save(InteractiveRoiSelector().select(frame))
     finally:
         source.close()
+
+
+def _start_light_command_executor(config: AppConfig, device_client: SafeRouteDeviceClient) -> None:
+    """유도등 명령 폴링을 이 프로세스 안에서 백그라운드 스레드로 돌린다.
+
+    혼잡도 감지(pipeline.run())와 완전히 독립된 관심사라, 릴레이 초기화가
+    실패해도 혼잡도 감지 자체는 계속 돼야 한다 - 여기서 예외를 흡수한다.
+    """
+    try:
+        relay = RelayController(host=config.relay_host, port=config.relay_port)
+        relay.refresh_status()
+    except RelayControllerError as exc:
+        logger.warning("릴레이 초기화 실패 - 유도등 명령 폴링 없이 계속 진행: %s", exc)
+        return
+    executor = LightCommandExecutor(device_client, relay, config.cctv_code)
+    thread = threading.Thread(
+        target=executor.run_forever,
+        kwargs={"interval_sec": config.relay_poll_interval_sec},
+        name="light-command-executor",
+        daemon=True,
+    )
+    thread.start()
+    logger.info("유도등 명령 폴링 시작: host=%s, port=%s, interval=%ss",
+                config.relay_host, config.relay_port, config.relay_poll_interval_sec)
 
 
 def main(argv=None) -> int:
@@ -72,6 +100,8 @@ def main(argv=None) -> int:
                                   config_poll_active_sec=config.config_poll_active_sec,
                                   config_poll_inactive_sec=config.config_poll_inactive_sec,
                                   preview=preview)
+    if device_client is not None and config.relay_host:
+        _start_light_command_executor(config, device_client)
     pipeline.run()
     return 0
 

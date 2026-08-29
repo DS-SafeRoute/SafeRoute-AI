@@ -41,6 +41,9 @@ class AppConfig:
     file_fallback_fps: float
     show_preview: bool
     log_level: str
+    relay_host: Optional[str]
+    relay_port: Optional[int]
+    relay_poll_interval_sec: float
 
     @staticmethod
     def from_env(env: Optional[Mapping[str, str]] = None, mode: Optional[str] = None) -> "AppConfig":
@@ -72,6 +75,17 @@ class AppConfig:
             raise ConfigError("SAFEROUTE_SERVER_BASE_URL is required for server reporting modes")
         if selected_mode in {"file", "rtsp"} and not e.get("DEVICE_AUTH_TOKEN"):
             raise ConfigError("DEVICE_AUTH_TOKEN is required for server reporting modes")
+        # 릴레이(유도등)는 옵션이다 - 이 CCTV(Pi)에 릴레이 보드가 실제로 붙어있을 때만
+        # RELAY_HOST를 설정한다. 포트는 기기마다 다르므로(USR-M0/ZLVirCom 설정 프로그램으로
+        # 실기기에서 확인) 기본값을 두지 않는다.
+        relay_host = e.get("RELAY_HOST")
+        relay_port_raw = e.get("RELAY_PORT")
+        if relay_host and not relay_port_raw:
+            raise ConfigError("RELAY_PORT is required when RELAY_HOST is set")
+        try:
+            relay_port = int(relay_port_raw) if relay_port_raw else None
+        except ValueError as exc:
+            raise ConfigError("RELAY_PORT must be an integer") from exc
         return AppConfig(
             mode=selected_mode, video_source=required("VIDEO_SOURCE"),
             roi_config_path=e.get("ROI_CONFIG_PATH", f"./config/roi/{cctv_code}.json"), cctv_code=cctv_code,
@@ -90,4 +104,6 @@ class AppConfig:
             file_realtime=boolean("FILE_REALTIME", True), file_fallback_fps=file_fallback_fps,
             show_preview=boolean("SHOW_PREVIEW", False),
             log_level=e.get("LOG_LEVEL", "INFO"),
+            relay_host=relay_host, relay_port=relay_port,
+            relay_poll_interval_sec=positive_float("RELAY_POLL_INTERVAL_SEC", "2"),
         )
