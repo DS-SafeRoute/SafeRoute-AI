@@ -116,6 +116,21 @@ def test_switch_to_CH2가_매뉴얼의_릴레이0_OFF_릴레이1_ON_명령과_�
     assert server.received == [MANUAL_CH1_OFF, MANUAL_CH2_ON]
 
 
+def test_both_on이_매뉴얼의_릴레이0_ON_릴레이1_ON_명령과_일치한다():
+    server = _RecordingServer()
+    server.start()
+    controller = RelayController(host="127.0.0.1", port=server.port, timeout=2)
+
+    try:
+        controller.both_on()
+    finally:
+        controller.close()
+        server.stop()
+
+    # both_on()은 CH1 ON -> CH2 ON 순서로 두 개의 명령을 보낸다
+    assert server.received == [MANUAL_CH1_ON, MANUAL_CH2_ON]
+
+
 def test_상태_조회가_매뉴얼의_릴레이0_상태_읽기_명령과_일치한다():
     server = _RecordingServer()
     server.start()

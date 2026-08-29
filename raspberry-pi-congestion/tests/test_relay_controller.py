@@ -188,6 +188,33 @@ def test_switch_to는_반대_채널을_끄고_대상_채널을_켠다():
     assert controller.is_on(RelayChannel.CH2) is True
 
 
+# === both_on (평상시 양쪽 점등) ===
+
+
+def test_both_on은_인터록_없이_두_채널을_모두_켠다():
+    # given: 두 채널 모두 꺼져 있는 상태
+    client = FakeModbusClient(coil_states={0: False, 1: False})
+    controller = make_controller(client)
+
+    # when
+    controller.both_on()
+
+    # then: turn_on()과 달리 반대 채널이 켜져 있어도 예외 없이 둘 다 켜진다
+    assert controller.is_on(RelayChannel.CH1) is True
+    assert controller.is_on(RelayChannel.CH2) is True
+
+
+def test_both_on은_한_채널만_켜진_상태에서도_예외_없이_나머지를_켠다():
+    # given: CH1만 켜져 있는 상태 (turn_on(CH2)였다면 BothChannelsOnError가 났을 상황)
+    client = FakeModbusClient(coil_states={0: True, 1: False})
+    controller = make_controller(client)
+
+    # when / then: 예외 없이 CH2도 켜진다
+    controller.both_on()
+    assert controller.is_on(RelayChannel.CH1) is True
+    assert controller.is_on(RelayChannel.CH2) is True
+
+
 # === 통신 실패 시 OFF / fail-safe ===
 
 

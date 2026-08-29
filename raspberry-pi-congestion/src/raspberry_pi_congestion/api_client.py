@@ -48,6 +48,7 @@ class SafeRouteDeviceClient(CongestionReporter):
     OBSERVATION_PATH = "/api/v1/device/congestion-observations"
     EVENT_PATH = "/api/v1/device/congestion-events"
     PRESIGNED_PATH = "/api/v1/device/congestion-images/presigned-url"
+    LIGHT_COMMANDS_PATH = "/api/v1/device/light-commands"
     RETRYABLE_STATUSES = {429}
 
     def __init__(self, base_url: str, auth_header_provider: AuthHeaderProvider,
@@ -148,6 +149,30 @@ class SafeRouteDeviceClient(CongestionReporter):
                              retry_statuses={404, 409}) is not None
         self._remember_outcome(f"image:{event_id}", success)
         return success
+
+    def fetch_light_commands(self, cctv_code: str) -> list[dict]:
+        """이 CCTV(=이 Pi)가 담당하는 유도등의 대기 중인 명령을 폴링한다.
+
+        BE가 EC2->사설 Pi 직접 호출을 하지 않으므로, Pi가 이 메서드로
+        먼저 물어봐서 가져가는 구조다. 실패하면 빈 목록을 반환한다
+        (다음 폴링에서 다시 시도).
+        """
+        response = self._send("GET", self.LIGHT_COMMANDS_PATH, params={"cctvCode": cctv_code})
+        if response is None:
+            return []
+        try:
+            return list(response.json()["commands"])
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.error("Invalid light command list response: %s", exc)
+            return []
+
+    def ack_light_command(self, command_id: str, success: bool, fail_reason: Optional[str] = None) -> bool:
+        """유도등 명령 실행 결과를 보고한다. BE는 이 호출을 멱등하게 처리한다."""
+        path = f"{self.LIGHT_COMMANDS_PATH}/{command_id}/ack"
+        payload: dict = {"success": success}
+        if fail_reason is not None:
+            payload["failReason"] = fail_reason
+        return self._send("PATCH", path, json=payload) is not None
 
     def _request_fn(self) -> Callable:
         if self._request is not None:

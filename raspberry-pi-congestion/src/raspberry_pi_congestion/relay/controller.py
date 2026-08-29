@@ -41,11 +41,16 @@ Safe Route 프로젝트 - 라즈베리파이 엣지에서 좌/우 유도등(스�
 
 안전 설계
 --------------------------------------------
-1. 두 채널은 절대 동시에 ON 상태가 될 수 없다. (좌/우 유도등이 동시에
-   켜지면 대피자에게 상반된 방향 신호를 줄 수 있어 소방법 취지에 반한다.)
+1. 훈련 중 방향을 안내할 때는 두 채널이 절대 동시에 ON 상태가 될 수
+   없다. (좌/우 유도등이 동시에 켜지면 대피자에게 상반된 방향 신호를
+   줄 수 있어 소방법 취지에 반한다.)
    -> turn_on()은 실제 기기에서 반대 채널 상태를 먼저 읽어 확인한 뒤에만
       ON 명령을 보낸다. 반대 채널이 ON이면 BothChannelsOnError를 던지고
       아무 명령도 보내지 않는다.
+   -> 단, 훈련이 없는 평상시에는 두 채널 모두 켜진 상태가 정상이다(일반
+      출구 표시등과 동일 - 특정 방향을 지시하는 게 아니라 출구 위치만
+      알리므로 좌/우 동시 점등이 안전 문제가 아니다). 이 경우에는
+      turn_on()의 인터록을 거치지 않는 both_on()을 사용한다.
 2. 통신 장애(연결 실패/타임아웃/에러 응답) 발생 시 즉시 fail-safe로 전환한다.
    - 상태 캐시를 UNKNOWN(None)으로 내려 "모르면 ON이라고 말하지 않는다"를
      보장하고,
@@ -108,7 +113,8 @@ class RelayController:
     >>> controller = RelayController(host="192.168.0.81", port=5000)
     >>> controller.refresh_status()          # 시작 시 실기기 상태와 캐시 동기화
     >>> controller.switch_to(RelayChannel.CH1)   # 좌측 유도등 방향으로 전환
-    >>> controller.all_off()                 # 훈련 종료/비상 시 강제 OFF
+    >>> controller.both_on()                 # 훈련 종료 -> 평상시(양쪽 점등) 복귀
+    >>> controller.all_off()                 # fail-safe 복구 등 강제 OFF
     """
 
     def __init__(
@@ -181,6 +187,24 @@ class RelayController:
             other = self._other_channel(channel)
             self._write_channel(other, False)
             self._write_channel(channel, True)
+
+    def both_on(self) -> None:
+        """두 채널을 모두 켠다 (평상시/훈련 미진행 상태 전용).
+
+        turn_on()과 달리 반대 채널 상태를 확인하지 않고 인터록을 거치지
+        않는다 - 훈련이 없을 때는 좌/우 동시 점등이 정상 상태이기 때문.
+        훈련 중 방향 안내에는 절대 쓰지 말고 turn_on()/switch_to()를
+        사용할 것.
+        """
+        with self._lock:
+            first_error: Optional[RelayCommunicationError] = None
+            for ch in RelayChannel:
+                try:
+                    self._write_channel(ch, True)
+                except RelayCommunicationError as exc:
+                    first_error = first_error or exc
+            if first_error is not None:
+                raise first_error
 
     def all_off(self) -> None:
         """두 채널 모두 OFF. fail-safe 복구나 훈련 종료 시 호출한다."""

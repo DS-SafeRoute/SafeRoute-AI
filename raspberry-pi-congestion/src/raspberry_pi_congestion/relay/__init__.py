@@ -1,3 +1,4 @@
+from .command_executor import LightCommandExecutor
 from .controller import (
     BothChannelsOnError,
     RelayChannel,
@@ -14,4 +15,5 @@ __all__ = [
     "RelayControllerError",
     "RelayCommunicationError",
     "BothChannelsOnError",
+    "LightCommandExecutor",
 ]
