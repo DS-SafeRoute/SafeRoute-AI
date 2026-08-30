@@ -84,6 +84,44 @@ def test_fetches_and_validates_backend_config():
     assert calls[0][1]["headers"]["Authorization"] == "Bearer token"
 
 
+def test_fetches_light_commands():
+    body = {"commands": [{"commandId": "cmd-1", "lightCode": "LIGHT_001", "direction": "LEFT"}]}
+    calls = []
+    client = SafeRouteDeviceClient("http://server", AuthHeaderProvider("token"),
+                                   request=lambda *a, **k: calls.append((a, k)) or Response(200, body))
+
+    commands = client.fetch_light_commands("CCTV_001")
+
+    assert commands == [{"commandId": "cmd-1", "lightCode": "LIGHT_001", "direction": "LEFT"}]
+    assert calls[0][1]["params"] == {"cctvCode": "CCTV_001"}
+
+
+def test_fetch_light_commands_returns_empty_list_on_failure():
+    client = SafeRouteDeviceClient("http://server", AuthHeaderProvider("token"), max_retries=0,
+                                   request=lambda *a, **k: Response(500), sleeper=lambda _: None)
+
+    assert client.fetch_light_commands("CCTV_001") == []
+
+
+def test_acks_light_command_success():
+    calls = []
+    client = SafeRouteDeviceClient("http://server", AuthHeaderProvider("token"),
+                                   request=lambda *a, **k: calls.append(k) or Response(200))
+
+    assert client.ack_light_command("cmd-1", success=True) is True
+    assert calls[0]["json"] == {"success": True}
+
+
+def test_acks_light_command_failure_includes_reason():
+    calls = []
+    client = SafeRouteDeviceClient("http://server", AuthHeaderProvider("token"),
+                                   request=lambda *a, **k: calls.append(k) or Response(200))
+
+    client.ack_light_command("cmd-1", success=False, fail_reason="relay timeout")
+
+    assert calls[0]["json"] == {"success": False, "failReason": "relay timeout"}
+
+
 @pytest.mark.parametrize("field", ["snapshotIntervalSec", "targetInferenceFps"])
 def test_inactive_config_rejects_non_positive_runtime_values(field):
     payload = {

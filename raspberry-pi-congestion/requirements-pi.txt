@@ -7,3 +7,4 @@ numpy>=1.24
 opencv-python-headless>=4.8
 requests>=2.31
 python-dotenv>=1.0
+pymodbus>=3.15,<4
