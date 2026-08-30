@@ -81,6 +81,25 @@ def test_empty_nms_output_returns_no_detections(tmp_path):
     assert detector.detect(np.zeros((20, 20, 3), dtype=np.uint8)) == []
 
 
+@pytest.mark.parametrize(
+    "frame",
+    [
+        np.empty((0, 20, 3), dtype=np.uint8),
+        np.empty((20, 0, 3), dtype=np.uint8),
+        np.zeros((20, 20, 3), dtype=np.float32),
+        np.zeros((20, 20, 3), dtype=np.int16),
+    ],
+)
+def test_rejects_empty_or_non_uint8_frames(tmp_path, frame):
+    runtime = FakeRuntime()
+    detector = make_detector(tmp_path, runtime)
+
+    with pytest.raises(ValueError, match="non-empty uint8 BGR ndarray"):
+        detector.detect(frame)
+
+    assert runtime.received is None
+
+
 def test_non_nms_output_is_rejected(tmp_path):
     runtime = FakeRuntime(np.zeros((1, 5), dtype=np.float32))
     detector = make_detector(tmp_path, runtime)

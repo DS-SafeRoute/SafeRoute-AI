@@ -40,6 +40,7 @@ class _HailoVStreamsRuntime:
                 OutputVStreamParams,
                 VDevice,
             )
+            from hailo_platform.pyhailort.pyhailort import FormatOrder
         except ImportError as exc:
             raise HailoRuntimeError(
                 "hailo_platform을 불러올 수 없습니다. HailoRT와 현재 Python 버전에 맞는 "
@@ -62,10 +63,10 @@ class _HailoVStreamsRuntime:
                 raise HailoRuntimeError(
                     f"Hailo NMS 단일 출력 HEF만 지원합니다(현재 출력 {len(output_infos)}개)."
                 )
-            if "NMS" not in str(output_infos[0].format.order).upper():
+            if output_infos[0].format.order != FormatOrder.HAILO_NMS_BY_CLASS:
                 raise HailoRuntimeError(
-                    "HEF 출력에 Hailo NMS 후처리가 없습니다. Hailo NMS가 포함된 "
-                    "YOLO 객체검출 HEF를 사용하세요."
+                    "HAILO_NMS_BY_CLASS 출력 HEF만 지원합니다"
+                    f"(현재 order={output_infos[0].format.order})."
                 )
 
             shape = tuple(int(value) for value in input_infos[0].shape)
@@ -175,8 +176,17 @@ class HailoPersonDetector(PersonDetector):
     def detect(self, frame) -> list[Detection]:
         if self._closed:
             raise HailoRuntimeError("Hailo detector가 이미 종료되었습니다.")
-        if not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[2] != 3:
-            raise ValueError("frame must be a BGR ndarray with shape (H, W, 3)")
+        if (
+            not isinstance(frame, np.ndarray)
+            or frame.ndim != 3
+            or frame.shape[2] != 3
+            or frame.shape[0] <= 0
+            or frame.shape[1] <= 0
+            or frame.dtype != np.uint8
+        ):
+            raise ValueError(
+                "frame must be a non-empty uint8 BGR ndarray with shape (H, W, 3)"
+            )
 
         original_height, original_width = frame.shape[:2]
         prepared, scale, pad_x, pad_y = self._preprocess(frame)

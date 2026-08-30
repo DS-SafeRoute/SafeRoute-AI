@@ -61,7 +61,7 @@ python -m raspberry_pi_congestion.main rtsp
 객체검출 HEF를 지원한다.
 
 - 단일 NHWC RGB 입력(`uint8`)
-- Hailo NMS가 포함된 단일 출력
+- `HAILO_NMS_BY_CLASS` 형식의 단일 출력
 - COCO class 순서(`person` class id `0`)
 - NMS row: `[ymin, xmin, ymax, xmax, score]` 정규화 좌표
 
