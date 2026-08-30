@@ -55,6 +55,71 @@ python -m raspberry_pi_congestion.main file
 python -m raspberry_pi_congestion.main rtsp
 ```
 
+## Hailo NPU 실행
+
+현재 Hailo backend는 HailoRT 4.x 기반 Hailo-8/Hailo-8L과 다음 계약의
+객체검출 HEF를 지원한다.
+
+- 단일 NHWC RGB 입력(`uint8`)
+- `HAILO_NMS_BY_CLASS` 형식의 단일 출력
+- COCO class 순서(`person` class id `0`)
+- NMS row: `[ymin, xmin, ymax, xmax, score]` 정규화 좌표
+
+일반 `yolov8n.pt`는 Hailo에서 실행할 수 없다. 장치 아키텍처와 설치된
+HailoRT 버전에 맞는 `.hef`를 사용해야 한다. Hailo-10H는 현재 지원 범위가
+아니며 별도의 HailoRT 5.x 어댑터 검증이 필요하다.
+
+AI Kit 또는 Hailo-8/8L AI HAT+에서 Hailo 패키지가 아직 없다면 Raspberry Pi
+OS의 공식 패키지를 설치하고 재부팅한다.
+
+```bash
+sudo apt update
+sudo apt install -y dkms hailo-all
+sudo reboot
+```
+
+장치와 모델을 확인한다.
+
+```bash
+hailortcli fw-control identify
+dmesg | grep -i hailo
+find /usr/share/hailo-models -type f -name '*.hef' 2>/dev/null
+hailortcli run /실제/모델/경로/model.hef
+```
+
+APT로 설치한 `hailo_platform`이 기존 가상환경에서 보이지 않으면 시스템
+site-packages를 사용하는 가상환경을 만든 뒤 Pi 의존성을 다시 설치한다.
+
+```bash
+python3 -m venv --system-site-packages .venv-hailo
+source .venv-hailo/bin/activate
+pip install -r requirements-pi.txt
+pip install -e . --no-deps
+python -c "import hailo_platform; print('hailo_platform import 성공')"
+```
+
+서버 전송 없이 CCTV별로 먼저 검증한다.
+
+```dotenv
+RUN_MODE=dry-run
+CCTV_CODE=CCTV_001
+VIDEO_SOURCE=rtsp://{USER}:{PASSWORD}@{CCTV_IP}:554/{STREAM_PATH}
+ROI_CONFIG_PATH=./config/roi/CCTV_001.json
+DETECTOR_BACKEND=hailo
+MODEL_PATH=/실제/모델/경로/model.hef
+DETECTOR_CONF_THRESHOLD=0.4
+TARGET_INFERENCE_FPS=5
+SHOW_PREVIEW=false
+```
+
+```bash
+python -m raspberry_pi_congestion.main dry-run
+```
+
+5초 관측 로그의 `sampleCount`가 약 25이면 유효 처리 속도가 약 5 FPS다.
+`CCTV_001`, `CCTV_002`를 각각 검증한 뒤 `RUN_MODE=rtsp`로 백엔드 통합
+테스트를 수행한다. RTSP URL, 카메라 비밀번호, 장치 토큰은 커밋하지 않는다.
+
 개발 PC에서 추론 화면을 확인하려면 `SHOW_PREVIEW=true`를 설정한다. 노란색은 ROI,
 초록색 박스는 ROI 안에서 집계된 사람, 주황색 박스는 ROI 밖 사람이다. 창에서 `Q` 또는
 `Esc`를 누르면 파이프라인과 미리보기 창이 함께 종료된다. 기본값은 `false`이며 전송용
@@ -86,4 +151,5 @@ src/raspberry_pi_congestion/
   window_aggregator.py   실수 평균·최대·성공 프레임 수 집계
 ```
 
-Hailo adapter는 실기기 HEF tensor와 후처리가 검증되기 전까지 의도적으로 미구현 오류를 낸다.
+Hailo 코드는 장치가 없는 CI에서 mock으로 검증한다. 실제 호환성, 처리 속도와
+장시간 안정성은 대상 라즈베리파이·HailoRT·HEF 조합에서 별도로 검증해야 한다.
