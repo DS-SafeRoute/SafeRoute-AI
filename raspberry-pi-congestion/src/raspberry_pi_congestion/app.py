@@ -6,8 +6,9 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
-from .api_client import CongestionReporter
+from .api_client import CongestionReporter, ImageUploadResult
 from .event_detector import CongestionEventDetector
+from .image_renderer import OpenCvDetectionRenderer
 from .models import (
     CongestionEvent, CongestionObservation, CongestionThresholds,
     DeviceCongestionConfig, EventDetectionSettings,
@@ -28,7 +29,10 @@ class CongestionPipeline:
                  epoch_ms: Callable[[], int] = lambda: int(time.time() * 1000),
                  config_provider=None, config_poll_active_sec: float = 5.0,
                  config_poll_inactive_sec: float = 15.0,
-                 preview=None) -> None:
+                 preview=None, image_renderer=None,
+                 max_presigned_refreshes: int = 1) -> None:
+        if max_presigned_refreshes < 0:
+            raise ValueError("max_presigned_refreshes must not be negative")
         self.video_source = video_source
         self.detector = detector
         self.roi_counter = roi_counter
@@ -42,6 +46,8 @@ class CongestionPipeline:
         self.config_poll_active_sec = config_poll_active_sec
         self.config_poll_inactive_sec = config_poll_inactive_sec
         self.preview = preview
+        self.image_renderer = image_renderer or OpenCvDetectionRenderer(roi_counter.roi)
+        self.max_presigned_refreshes = max_presigned_refreshes
         self._monotonic = monotonic
         self._epoch_ms = epoch_ms
         self._last_inference = float("-inf")
@@ -97,13 +103,16 @@ class CongestionPipeline:
                 detections,
                 inside_detections,
             )
+        rendered_frame = self.image_renderer.render(
+            frame, detections, inside_detections
+        )
         self._process_local_event(frame, count, captured_at_ms, config)
         summary = self.aggregator.add_sample(count, captured_at_ms)
         if summary is None:
-            self._monitoring_frame = self._copy_frame(frame)
+            self._monitoring_frame = rendered_frame
             return None
         monitoring_frame = self._monitoring_frame
-        self._monitoring_frame = self._copy_frame(frame)
+        self._monitoring_frame = rendered_frame
         if monitoring_frame is None:
             logger.error("Completed observation window has no monitoring frame")
             return None
@@ -123,10 +132,6 @@ class CongestionPipeline:
                 config.training_session_id,
             )
         return observation
-
-    @staticmethod
-    def _copy_frame(frame):
-        return frame.copy() if hasattr(frame, "copy") else frame
 
     def _process_local_event(self, frame, count: int, now_ms: int,
                              config: DeviceCongestionConfig) -> None:
@@ -186,16 +191,25 @@ class CongestionPipeline:
             ok, encoded = cv2.imencode(".jpg", frame)
             if not ok:
                 return None
-            target = client.request_image_upload(
-                training_session_id=config.training_session_id,
-                cctv_code=self.cctv_code,
-                image_type=image_type,
-                reference_id=reference_id,
-                captured_at=captured_at,
-            )
-            if target is None or target["expiresAt"] <= self._epoch_ms():
-                return None
-            return target["objectKey"] if client.upload_jpeg(target["uploadUrl"], encoded.tobytes()) else None
+            jpeg = encoded.tobytes()
+            for _ in range(self.max_presigned_refreshes + 1):
+                target = client.request_image_upload(
+                    training_session_id=config.training_session_id,
+                    cctv_code=self.cctv_code,
+                    image_type=image_type,
+                    reference_id=reference_id,
+                    captured_at=captured_at,
+                )
+                if target is None:
+                    return None
+                if target["expiresAt"] <= self._epoch_ms():
+                    continue
+                result = client.upload_jpeg(target["uploadUrl"], jpeg)
+                if result is True or result == ImageUploadResult.SUCCESS:
+                    return target["objectKey"]
+                if result != ImageUploadResult.EXPIRED:
+                    return None
+            return None
         except Exception as exc:
             logger.warning("Snapshot processing failed: %s", type(exc).__name__)
             return None

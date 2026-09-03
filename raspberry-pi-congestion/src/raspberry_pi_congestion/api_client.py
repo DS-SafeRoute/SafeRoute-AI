@@ -5,11 +5,18 @@ import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
+from enum import Enum
 from typing import Callable, Mapping, Optional
 
 from .models import CongestionEvent, CongestionObservation, DeviceCongestionConfig
 
 logger = logging.getLogger(__name__)
+
+
+class ImageUploadResult(str, Enum):
+    SUCCESS = "SUCCESS"
+    EXPIRED = "EXPIRED"
+    FAILED = "FAILED"
 
 
 class CongestionReporter(ABC):
@@ -133,15 +140,31 @@ class SafeRouteDeviceClient(CongestionReporter):
             logger.error("Invalid presigned URL response")
             return None
 
-    def upload_jpeg(self, upload_url: str, jpeg: bytes) -> bool:
+    def upload_jpeg(self, upload_url: str, jpeg: bytes) -> ImageUploadResult:
         request = self._request_fn()
-        try:
-            response = request("PUT", upload_url, data=jpeg, headers={"Content-Type": "image/jpeg"},
-                               timeout=(self.timeout_sec, self.timeout_sec))
-            return 200 <= response.status_code < 300
-        except Exception as exc:
-            logger.warning("Image upload failed: %s", type(exc).__name__)
-            return False
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = request(
+                    "PUT",
+                    upload_url,
+                    data=jpeg,
+                    headers={"Content-Type": "image/jpeg"},
+                    timeout=(self.timeout_sec, self.timeout_sec),
+                )
+                status = response.status_code
+                if 200 <= status < 300:
+                    return ImageUploadResult.SUCCESS
+                if status in {401, 403}:
+                    return ImageUploadResult.EXPIRED
+                if status < 500 and status not in self.RETRYABLE_STATUSES:
+                    logger.error("S3 image upload rejected with HTTP %d", status)
+                    return ImageUploadResult.FAILED
+            except Exception as exc:
+                logger.warning("Image upload failed: %s", type(exc).__name__)
+            if attempt >= self.max_retries:
+                return ImageUploadResult.FAILED
+            self._sleep(self.backoff_base_sec * (2 ** attempt))
+        return ImageUploadResult.FAILED
 
     def attach_event_image(self, event_id: str, object_key: str, uploaded_at: int) -> bool:
         path = f"{self.EVENT_PATH}/{event_id}/image"

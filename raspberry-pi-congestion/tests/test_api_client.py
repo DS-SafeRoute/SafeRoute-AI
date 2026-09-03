@@ -1,6 +1,11 @@
 import pytest
 
-from raspberry_pi_congestion.api_client import AuthHeaderProvider, SafeRouteDeviceClient, SpringCongestionReporter
+from raspberry_pi_congestion.api_client import (
+    AuthHeaderProvider,
+    ImageUploadResult,
+    SafeRouteDeviceClient,
+    SpringCongestionReporter,
+)
 from raspberry_pi_congestion.models import (
     CongestionEvent,
     CongestionLevel,
@@ -147,6 +152,71 @@ def test_event_terminal_4xx_is_not_retried_or_queued():
     assert not client.report_event(event)
     assert len(calls) == 1
     assert not client.should_queue_failure(event.event_id)
+
+
+@pytest.mark.parametrize("first_outcome", [500, 503, TimeoutError()])
+def test_jpeg_upload_retries_transient_failure_with_same_body(first_outcome):
+    calls = []
+    outcomes = iter([first_outcome, 200])
+
+    def request(*args, **kwargs):
+        calls.append((args, kwargs))
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return Response(outcome)
+
+    client = SafeRouteDeviceClient(
+        "http://server",
+        AuthHeaderProvider("token"),
+        max_retries=1,
+        request=request,
+        sleeper=lambda _: None,
+    )
+
+    assert client.upload_jpeg("https://s3.example.com/signed", b"jpeg") == ImageUploadResult.SUCCESS
+    assert len(calls) == 2
+    assert calls[0][1]["data"] == calls[1][1]["data"] == b"jpeg"
+    assert calls[0][1]["headers"] == {"Content-Type": "image/jpeg"}
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_jpeg_upload_requests_new_url_for_expired_signature(status):
+    client = SafeRouteDeviceClient(
+        "http://server",
+        AuthHeaderProvider("token"),
+        request=lambda *a, **k: Response(status),
+    )
+
+    assert client.upload_jpeg("https://s3.example.com/signed", b"jpeg") == ImageUploadResult.EXPIRED
+
+
+def test_jpeg_upload_does_not_retry_permanent_4xx():
+    calls = []
+    client = SafeRouteDeviceClient(
+        "http://server",
+        AuthHeaderProvider("token"),
+        max_retries=3,
+        request=lambda *a, **k: calls.append(k) or Response(400),
+        sleeper=lambda _: None,
+    )
+
+    assert client.upload_jpeg("https://s3.example.com/signed", b"jpeg") == ImageUploadResult.FAILED
+    assert len(calls) == 1
+
+
+def test_jpeg_upload_log_does_not_expose_presigned_url(caplog):
+    signed_url = "https://s3.example.com/object?X-Amz-Signature=secret"
+    client = SafeRouteDeviceClient(
+        "http://server",
+        AuthHeaderProvider("token"),
+        max_retries=0,
+        request=lambda *a, **k: (_ for _ in ()).throw(TimeoutError()),
+    )
+
+    assert client.upload_jpeg(signed_url, b"jpeg") == ImageUploadResult.FAILED
+    assert signed_url not in caplog.text
+    assert "secret" not in caplog.text
 
 
 def test_configurable_auth_header():
