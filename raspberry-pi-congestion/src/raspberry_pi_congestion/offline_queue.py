@@ -4,6 +4,7 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,7 @@ class QueuedObservation:
     created_at: float
     attempts: int
     operation: str = "observation"
+    training_session_id: Optional[str] = None
 
 
 class OfflineQueue:
@@ -25,23 +27,55 @@ class OfflineQueue:
         columns = {row[1] for row in self._conn.execute("PRAGMA table_info(observations)")}
         if "operation" not in columns:
             self._conn.execute("ALTER TABLE observations ADD COLUMN operation TEXT NOT NULL DEFAULT 'observation'")
+        if "training_session_id" not in columns:
+            self._conn.execute("ALTER TABLE observations ADD COLUMN training_session_id TEXT")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_created ON observations(created_at)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_session ON observations(training_session_id)")
         self._conn.commit()
 
-    def enqueue(self, event_id: str, payload: dict, operation: str = "observation") -> None:
-        self._conn.execute("INSERT OR IGNORE INTO observations(event_id,payload,created_at,operation) VALUES(?,?,?,?)", (event_id, json.dumps(payload), time.time(), operation))
+    def enqueue(self, event_id: str, payload: dict, operation: str = "observation",
+                training_session_id: Optional[str] = None) -> None:
+        session_id = training_session_id or self._extract_session_id(payload)
+        self._conn.execute(
+            "INSERT OR IGNORE INTO observations(event_id,payload,created_at,operation,training_session_id) VALUES(?,?,?,?,?)",
+            (event_id, json.dumps(payload), time.time(), operation, session_id),
+        )
         self._conn.commit()
         overflow = self.size() - self.max_items
         if overflow > 0:
             self._conn.execute("DELETE FROM observations WHERE id IN (SELECT id FROM observations ORDER BY created_at LIMIT ?)", (overflow,))
             self._conn.commit()
 
-    def peek_oldest(self, limit: int = 10) -> list[QueuedObservation]:
+    def peek_oldest(self, limit: int = 10,
+                    training_session_id: Optional[str] = None) -> list[QueuedObservation]:
         cutoff = time.time() - self.max_age_sec
         self._conn.execute("DELETE FROM observations WHERE created_at < ?", (cutoff,))
         self._conn.commit()
-        rows = self._conn.execute("SELECT id,event_id,payload,created_at,attempts,operation FROM observations ORDER BY created_at LIMIT ?", (limit,)).fetchall()
-        return [QueuedObservation(r[0], r[1], json.loads(r[2]), r[3], r[4], r[5]) for r in rows]
+        if training_session_id is None:
+            rows = self._conn.execute(
+                "SELECT id,event_id,payload,created_at,attempts,operation,training_session_id "
+                "FROM observations ORDER BY created_at LIMIT ?", (limit,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT id,event_id,payload,created_at,attempts,operation,training_session_id "
+                "FROM observations WHERE training_session_id=? ORDER BY created_at LIMIT ?",
+                (training_session_id, limit),
+            ).fetchall()
+        return [QueuedObservation(r[0], r[1], json.loads(r[2]), r[3], r[4], r[5], r[6]) for r in rows]
+
+    def discard_except_session(self, training_session_id: str) -> int:
+        cursor = self._conn.execute(
+            "DELETE FROM observations WHERE training_session_id IS NULL OR training_session_id<>?",
+            (training_session_id,),
+        )
+        self._conn.commit()
+        return max(0, cursor.rowcount)
+
+    def clear(self) -> int:
+        cursor = self._conn.execute("DELETE FROM observations")
+        self._conn.commit()
+        return max(0, cursor.rowcount)
 
     def mark_success(self, item_id: int) -> None:
         self._conn.execute("DELETE FROM observations WHERE id=?", (item_id,))
@@ -56,6 +90,13 @@ class OfflineQueue:
 
     def close(self) -> None:
         self._conn.close()
+
+    @staticmethod
+    def _extract_session_id(payload: dict) -> Optional[str]:
+        session_id = payload.get("trainingSessionId")
+        if session_id is None and isinstance(payload.get("eventPayload"), dict):
+            session_id = payload["eventPayload"].get("trainingSessionId")
+        return str(session_id) if session_id else None
 
     def __enter__(self):
         return self
