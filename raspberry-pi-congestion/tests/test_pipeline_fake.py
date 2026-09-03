@@ -176,3 +176,29 @@ def test_preview_receives_detections_and_can_stop_pipeline():
     assert len(preview.calls[0][1]) == 1
     assert len(preview.calls[0][2]) == 1
     assert preview.closed
+
+
+def test_file_timeline_selects_frames_evenly_at_target_inference_fps():
+    class TimedSource(Source):
+        def __init__(self, frame):
+            super().__init__(frame)
+            self.current_position_ms = None
+
+        def frames(self):
+            for position_ms in range(0, 1_000, 100):
+                self.current_position_ms = position_ms
+                yield self.frame
+
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    source = TimedSource(frame)
+    detector = FakePersonDetector([])
+    pipeline = CongestionPipeline(
+        source, detector,
+        RoiCounter([Point(0, 0), Point(1, 0), Point(1, 1), Point(0, 1)]),
+        WindowAggregator(5), Reporter(), "CCTV_TEST",
+        target_fps=2, epoch_ms=lambda: 1_000_000,
+    )
+
+    pipeline.run()
+
+    assert detector.call_count == 2

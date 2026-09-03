@@ -92,15 +92,18 @@ def test_uploaded_monitoring_jpeg_contains_bbox_and_matches_observation_referenc
     instance.process_frame(frame)
     instance.process_frame(frame)
     observation = instance.process_frame(frame)
+    assert instance.delivery_queue.wait_idle()
 
     uploaded = cv2.imdecode(np.frombuffer(client.uploads[0][1], dtype=np.uint8), cv2.IMREAD_COLOR)
     assert uploaded is not None
     assert uploaded[40, 40, 1] > uploaded[40, 40, 0]
-    assert observation.monitoring_image_key == "monitoring/object.jpg"
+    delivered = client.observations[0]
+    assert delivered.monitoring_image_key == "monitoring/object.jpg"
     assert client.presigned_requests[0]["reference_id"] == observation.event_id
     assert client.presigned_requests[0]["captured_at"] == observation.captured_at == 2_000
     assert client.presigned_requests[0]["image_type"] == "MONITORING"
     assert np.array_equal(frame, np.zeros_like(frame))
+    instance.close()
 
 
 def test_expired_upload_url_is_reissued_with_same_reference_and_timestamp():
@@ -125,6 +128,7 @@ def test_expired_upload_url_is_reissued_with_same_reference_and_timestamp():
     assert len(client.presigned_requests) == 2
     assert {request["reference_id"] for request in client.presigned_requests} == {"observation-id"}
     assert {request["captured_at"] for request in client.presigned_requests} == {5_000}
+    instance.close()
 
 
 def test_repeated_image_failure_falls_back_to_observation_without_image():
@@ -138,6 +142,8 @@ def test_repeated_image_failure_falls_back_to_observation_without_image():
     instance.process_frame(frame)
     instance.process_frame(frame)
     observation = instance.process_frame(frame)
+    assert instance.delivery_queue.wait_idle()
 
     assert observation.monitoring_image_key is None
     assert client.observations == [observation]
+    instance.close()
