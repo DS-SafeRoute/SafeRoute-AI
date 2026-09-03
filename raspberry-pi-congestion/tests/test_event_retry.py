@@ -25,6 +25,7 @@ class Detector:
 class Client:
     def __init__(self):
         self.replayed_events = []
+        self.attached_images = []
 
     def report_event(self, event):
         return False
@@ -44,6 +45,10 @@ class Client:
 
     def report_event_json(self, payload):
         self.replayed_events.append(payload)
+        return True
+
+    def attach_event_image(self, event_id, image_key, uploaded_at):
+        self.attached_images.append((event_id, image_key, uploaded_at))
         return True
 
 
@@ -73,23 +78,25 @@ def test_failed_event_keeps_uploaded_image_until_replay_succeeds(tmp_path):
         event_detection=EventDetectionSettings(1, 1, 30),
     )
 
+    pipeline._ensure_delivery_session(config.training_session_id)
     pipeline._process_local_event(np.zeros((10, 10, 3), dtype=np.uint8), 2, 1_000, config)
+    # The event is queued after POST fails; its image is not uploaded out of order.
+    assert pipeline.delivery_queue.wait_idle()
 
     queued_event = queue.peek_oldest()[0]
     assert queued_event.operation == "event"
-    assert queued_event.payload["eventImageKey"].endswith("event.jpg")
+    assert "eventImageKey" not in queued_event.payload
+    assert "jpegBase64" in queued_event.payload
     original_event = queued_event.payload["eventPayload"]
 
     pipeline._config = config
     pipeline._maybe_flush_queue(1)
+    assert pipeline.delivery_queue.wait_idle()
 
     remaining = queue.peek_oldest()
     assert client.replayed_events == [original_event]
-    assert len(remaining) == 1
-    assert remaining[0].operation == "event_image"
-    assert remaining[0].payload == {
-        "eventId": queued_event.event_id,
-        "eventImageKey": queued_event.payload["eventImageKey"],
-        "uploadedAt": 2_000,
-    }
+    assert remaining == []
+    assert client.attached_images == [
+        (queued_event.event_id, "training/session/events/CCTV_001/event.jpg", 2_000)
+    ]
     pipeline.close()
