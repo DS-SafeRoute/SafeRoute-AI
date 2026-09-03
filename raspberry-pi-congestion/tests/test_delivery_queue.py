@@ -1,5 +1,4 @@
 import threading
-import time
 
 import numpy as np
 
@@ -94,11 +93,70 @@ def test_session_change_discards_waiting_and_suppresses_inflight_delivery():
     assert renderer.entered.wait(1)
     queue.submit_monitoring(monitoring("waiting"))
 
-    assert queue.set_session("new-session") == 1
+    changed = threading.Event()
+    discarded = []
+
+    def change_session():
+        discarded.append(queue.set_session("new-session"))
+        changed.set()
+
+    transition = threading.Thread(target=change_session)
+    transition.start()
+    with queue._condition:
+        while queue._active_session_id != "new-session":
+            queue._condition.wait(1)
+    assert not changed.is_set()
     renderer.release.set()
-    assert queue.wait_idle()
+    assert changed.wait(1)
+    transition.join(1)
+    assert discarded == [1]
     assert client.delivered == []
     queue.close()
+
+
+class PassthroughRenderer:
+    def render(self, frame, detections, inside_detections):
+        return frame
+
+
+class BlockingReportClient(Client):
+    def __init__(self):
+        super().__init__()
+        self.report_started = threading.Event()
+        self.release_report = threading.Event()
+
+    def report(self, observation):
+        self.report_started.set()
+        assert self.release_report.wait(2)
+        return False
+
+
+def test_session_change_waits_for_inflight_report_and_skips_stale_retry(tmp_path):
+    from raspberry_pi_congestion.offline_queue import OfflineQueue
+
+    client = BlockingReportClient()
+    offline = OfflineQueue(str(tmp_path / "offline.db"))
+    queue = DeliveryQueue(client, PassthroughRenderer(), offline_queue=offline)
+    queue.set_session(SESSION)
+    queue.submit_monitoring(monitoring("in-flight"))
+    assert client.report_started.wait(1)
+
+    changed = threading.Event()
+    transition = threading.Thread(
+        target=lambda: (queue.set_session("new-session"), changed.set())
+    )
+    transition.start()
+    with queue._condition:
+        while queue._active_session_id != "new-session":
+            queue._condition.wait(1)
+    assert not changed.is_set()
+
+    client.release_report.set()
+    assert changed.wait(1)
+    transition.join(1)
+    assert offline.size() == 0
+    queue.close()
+    offline.close()
 
 
 class SlowUploadClient(Client):
@@ -138,19 +196,24 @@ def test_network_wait_does_not_block_inference_submission():
     )
     frame = np.zeros((8, 8, 3), dtype=np.uint8)
 
-    started = time.monotonic()
-    pipeline.process_frame(frame, 1_000)
-    pipeline.process_frame(frame, 2_000)
-    pipeline.process_frame(frame, 5_000)
-    elapsed = time.monotonic() - started
+    submission_done = threading.Event()
 
-    assert elapsed < 0.2
+    def submit_frames():
+        pipeline.process_frame(frame, 1_000)
+        pipeline.process_frame(frame, 2_000)
+        pipeline.process_frame(frame, 5_000)
+        submission_done.set()
+
+    submission = threading.Thread(target=submit_frames)
+    submission.start()
     assert client.upload_started.wait(1)
+    assert submission_done.wait(1)
     client.release_upload.set()
+    submission.join(1)
     pipeline.close()
 
 
-def test_shutdown_timeout_persists_unfinished_snapshot(tmp_path):
+def test_shutdown_timeout_persists_only_jobs_not_owned_by_worker(tmp_path):
     from raspberry_pi_congestion.offline_queue import OfflineQueue
 
     client = SlowUploadClient()
@@ -162,13 +225,16 @@ def test_shutdown_timeout_persists_unfinished_snapshot(tmp_path):
     # This test blocks in the client, not in the renderer.
     queue.renderer.release.set()
     queue.set_session(SESSION)
-    queue.submit_monitoring(monitoring("unfinished"))
+    queue.submit_monitoring(monitoring("in-flight"))
     assert client.upload_started.wait(1)
+    queue.submit_monitoring(monitoring("waiting"))
 
     queue.close()
 
-    item = offline.peek_oldest()[0]
-    assert item.event_id == "unfinished"
+    items = offline.peek_oldest()
+    assert len(items) == 1
+    item = items[0]
+    assert item.event_id == "waiting"
     assert item.operation == "pending_observation"
     assert item.payload["observationPayload"]["capturedAt"] == 4_000
     assert item.payload["jpegBase64"]
