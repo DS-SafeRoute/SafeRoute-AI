@@ -90,7 +90,7 @@ def test_file_loop_reopens_capture_and_resets_pacing():
     assert next(frames) == "first"
     assert next(frames) == "second"
     source.close()
-    assert clock.sleeps == []
+    assert clock.sleeps == [0.5]
 
 
 def test_file_skips_frames_that_are_older_than_playback_clock():

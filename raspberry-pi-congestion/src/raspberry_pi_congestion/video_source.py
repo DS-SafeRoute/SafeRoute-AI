@@ -66,7 +66,8 @@ class FileVideoSource(VideoSource):
                 self.current_position_ms = position_ms
                 yield frame
             elif self.loop:
-                timeline_offset_ms += frame_index * self._frame_interval_sec * 1000.0
+                completed_segment_sec = frame_index * self._frame_interval_sec
+                timeline_offset_ms += completed_segment_sec * 1000.0
                 self._cap.release()
                 self._cap = self._capture_factory(self.path)
                 if not self._cap.isOpened():
@@ -74,7 +75,7 @@ class FileVideoSource(VideoSource):
                 self._frame_interval_sec = self._resolve_frame_interval()
                 frame_index = 0
                 segment_start_ms = timeline_offset_ms
-                playback_started_at = self._monotonic()
+                playback_started_at += completed_segment_sec
             else:
                 return
 
