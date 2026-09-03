@@ -67,6 +67,7 @@ class DeliveryQueue:
         self._stop = False
         self._busy = False
         self._current_job = None
+        self._current_session_id: Optional[str] = None
         self._flush_requested = False
         self._thread = threading.Thread(
             target=self._run, name="congestion-delivery", daemon=True
@@ -82,6 +83,8 @@ class DeliveryQueue:
             self._events.clear()
             self._monitoring.clear()
             self._condition.notify_all()
+            while self._busy and self._current_session_id != session_id:
+                self._condition.wait()
             return discarded
 
     def submit_monitoring(self, job: MonitoringDelivery) -> bool:
@@ -136,8 +139,6 @@ class DeliveryQueue:
         self.wait_idle(self.shutdown_timeout_sec)
         with self._condition:
             pending = [*self._events, *self._monitoring]
-            if self._current_job is not None:
-                pending.insert(0, self._current_job)
             self._events.clear()
             self._monitoring.clear()
             self._stop = True
@@ -178,6 +179,9 @@ class DeliveryQueue:
                     job = self._monitoring.popleft()
                 self._busy = True
                 self._current_job = job
+                self._current_session_id = (
+                    self._job_session(job) if job is not None else self._active_session_id
+                )
             try:
                 if job is None:
                     self._flush_offline()
@@ -194,6 +198,7 @@ class DeliveryQueue:
                 with self._condition:
                     self._busy = False
                     self._current_job = None
+                    self._current_session_id = None
                     self._condition.notify_all()
 
     def _flush_offline(self) -> None:
@@ -271,7 +276,10 @@ class DeliveryQueue:
             job.event_id, job.training_session_id, job.cctv_code,
             job.config_version, job.summary, image_key,
         )
-        if not self.client.report(observation) and self._retryable(job.event_id):
+        reported = self.client.report(observation)
+        if not self._session_active(job.training_session_id):
+            return
+        if not reported and self._retryable(job.event_id):
             self._enqueue_offline(
                 job.event_id, observation.to_json(), "observation", job.training_session_id
             )
