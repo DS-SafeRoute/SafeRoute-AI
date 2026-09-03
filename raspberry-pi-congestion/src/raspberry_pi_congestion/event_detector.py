@@ -59,7 +59,8 @@ class CongestionEventDetector:
 
     def _observe_start(self, level: CongestionLevel, now_ms: int,
                        settings: EventDetectionSettings) -> Optional[str]:
-        if not self._candidate_reached(level, settings.required_consecutive_frames):
+        if not self._bottleneck_candidate_reached(
+                level, settings.required_consecutive_frames):
             return None
 
         cooldown_ms = int(settings.cooldown_sec * 1000)
@@ -70,6 +71,15 @@ class CongestionEventDetector:
         self._last_started_at_ms = now_ms
         self._clear_candidate()
         return "CONGESTION_STARTED"
+
+    def _bottleneck_candidate_reached(self, level: CongestionLevel,
+                                      required_frames: int) -> bool:
+        if self._candidate is None or not self._candidate.is_bottleneck:
+            self._candidate_count = 1
+        else:
+            self._candidate_count += 1
+        self._candidate = level
+        return self._candidate_count >= required_frames
 
     def _candidate_reached(self, level: CongestionLevel, required_frames: int) -> bool:
         if self._candidate != level:

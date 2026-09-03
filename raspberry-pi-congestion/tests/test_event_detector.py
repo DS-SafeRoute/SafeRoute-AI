@@ -42,15 +42,15 @@ def test_very_crowded_can_start_bottleneck_directly():
     assert detector.current_level == CongestionLevel.VERY_CROWDED
 
 
-def test_start_candidate_must_be_consecutive_at_same_bottleneck_level():
+def test_start_candidate_counts_mixed_bottleneck_levels_as_consecutive():
     detector = CongestionEventDetector()
     settings = EventDetectionSettings(2, 2, 0)
 
     assert detector.observe(CongestionLevel.CROWDED, 1_000, settings) is None
     assert detector.observe(CongestionLevel.CAUTION, 2_000, settings) is None
     assert detector.observe(CongestionLevel.CROWDED, 3_000, settings) is None
-    assert detector.observe(CongestionLevel.VERY_CROWDED, 4_000, settings) is None
-    assert detector.observe(CongestionLevel.VERY_CROWDED, 5_000, settings) == "CONGESTION_STARTED"
+    assert detector.observe(CongestionLevel.VERY_CROWDED, 4_000, settings) == "CONGESTION_STARTED"
+    assert detector.current_level == CongestionLevel.VERY_CROWDED
 
 
 def test_bottleneck_downgrade_is_silent_and_allows_real_level_up_again():
