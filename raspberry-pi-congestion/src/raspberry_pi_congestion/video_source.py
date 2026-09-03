@@ -42,38 +42,44 @@ class FileVideoSource(VideoSource):
             self.close()
             raise RuntimeError(f"Cannot open video file: {path}")
         self._frame_interval_sec = self._resolve_frame_interval()
+        self.current_position_ms: Optional[float] = None
 
     def frames(self) -> Iterator[object]:
-        next_frame_at = self._monotonic()
+        playback_started_at = self._monotonic()
+        segment_start_ms = 0.0
+        timeline_offset_ms = 0.0
+        frame_index = 0
         while self._cap is not None:
             ok, frame = self._cap.read()
             if ok:
+                position_ms = timeline_offset_ms + frame_index * self._frame_interval_sec * 1000.0
+                frame_index += 1
                 if self.realtime:
-                    # 파일을 디스크 속도로 읽으면 5초 집계가 생성되기 전에 영상이 끝난다.
-                    # 원본 FPS 간격만큼 기다려 실제 CCTV 스트림과 같은 시간 흐름을 만든다.
-                    delay = next_frame_at - self._monotonic()
+                    due_at = playback_started_at + (position_ms - segment_start_ms) / 1000.0
+                    now = self._monotonic()
+                    if due_at < now - self._frame_interval_sec:
+                        # 디코딩/추론이 원본 영상보다 뒤처졌다면 과거 프레임은 내보내지 않는다.
+                        continue
+                    delay = due_at - now
                     if delay > 0:
                         self._sleep(delay)
+                self.current_position_ms = position_ms
                 yield frame
-                if self.realtime:
-                    next_frame_at += self._frame_interval_sec
-                    now = self._monotonic()
-                    if next_frame_at < now - self._frame_interval_sec:
-                        # 추론이 오래 걸린 경우 지난 프레임 시간까지 연속 sleep하지 않도록 기준을 재설정한다.
-                        next_frame_at = now
             elif self.loop:
+                completed_segment_sec = frame_index * self._frame_interval_sec
+                timeline_offset_ms += completed_segment_sec * 1000.0
                 self._cap.release()
                 self._cap = self._capture_factory(self.path)
                 if not self._cap.isOpened():
                     return
                 self._frame_interval_sec = self._resolve_frame_interval()
-                next_frame_at = self._monotonic()
+                frame_index = 0
+                segment_start_ms = timeline_offset_ms
+                playback_started_at += completed_segment_sec
             else:
                 return
 
     def _resolve_frame_interval(self) -> float:
-        if not self.realtime:
-            return 0.0
         try:
             # OpenCV CAP_PROP_FPS의 숫자 값은 5다. 테스트 대역에서도 cv2 import 없이 조회한다.
             source_fps = float(self._cap.get(5))
