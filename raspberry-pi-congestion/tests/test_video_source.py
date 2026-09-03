@@ -93,6 +93,22 @@ def test_file_loop_reopens_capture_and_resets_pacing():
     assert clock.sleeps == []
 
 
+def test_file_skips_frames_that_are_older_than_playback_clock():
+    cap = Capture(list(range(10)), fps=10)
+    clock = Clock()
+    source = FileVideoSource(
+        "video.mp4", capture_factory=lambda _: cap,
+        monotonic=clock, sleeper=clock.sleep,
+    )
+    frames = source.frames()
+
+    assert next(frames) == 0
+    clock.value = 0.35
+    assert next(frames) == 3
+    assert source.current_position_ms == pytest.approx(300)
+    source.close()
+
+
 def test_rtsp_reconnect_limit_and_backoff():
     captures = []
     def factory(_):
