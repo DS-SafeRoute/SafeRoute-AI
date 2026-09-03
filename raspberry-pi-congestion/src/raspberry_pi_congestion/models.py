@@ -104,6 +104,10 @@ class CongestionLevel(str, Enum):
     def rank(self) -> int:
         return list(CongestionLevel).index(self)
 
+    @property
+    def is_bottleneck(self) -> bool:
+        return self in {CongestionLevel.CROWDED, CongestionLevel.VERY_CROWDED}
+
 
 @dataclass(frozen=True)
 class CongestionThresholds:

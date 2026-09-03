@@ -73,7 +73,7 @@ def test_failed_event_keeps_uploaded_image_until_replay_succeeds(tmp_path):
         event_detection=EventDetectionSettings(1, 1, 30),
     )
 
-    pipeline._process_local_event(np.zeros((10, 10, 3), dtype=np.uint8), 1, 1_000, config)
+    pipeline._process_local_event(np.zeros((10, 10, 3), dtype=np.uint8), 2, 1_000, config)
 
     queued_event = queue.peek_oldest()[0]
     assert queued_event.operation == "event"

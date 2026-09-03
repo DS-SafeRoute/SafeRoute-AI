@@ -1,7 +1,12 @@
 import pytest
 
 from raspberry_pi_congestion.api_client import AuthHeaderProvider, SafeRouteDeviceClient, SpringCongestionReporter
-from raspberry_pi_congestion.models import CongestionObservation, DeviceCongestionConfig
+from raspberry_pi_congestion.models import (
+    CongestionEvent,
+    CongestionLevel,
+    CongestionObservation,
+    DeviceCongestionConfig,
+)
 
 
 class Response:
@@ -15,6 +20,20 @@ class Response:
 
 def observation():
     return CongestionObservation("event-1", "session-uuid", "CCTV_001", 4.75, 8, 25, 1000, 6000, 6000, 1)
+
+
+def congestion_event():
+    return CongestionEvent(
+        "congestion-event-1",
+        "session-uuid",
+        "CCTV_001",
+        "CONGESTION_STARTED",
+        1_000,
+        6,
+        3.0,
+        CongestionLevel.CROWDED,
+        1,
+    )
 
 
 def test_request_contains_only_allowed_fields():
@@ -60,6 +79,74 @@ def test_retryable_failures_are_bounded_and_payload_is_stable(outcomes):
     reporter = SpringCongestionReporter("http://server", max_retries=1, request=request, sleeper=lambda _: None)
     assert reporter.report(observation())
     assert len(calls) == 2 and calls[0] == calls[1]
+
+
+def test_event_request_contains_only_contract_fields():
+    assert set(congestion_event().to_json()) == {
+        "eventId",
+        "trainingSessionId",
+        "cctvCode",
+        "eventType",
+        "detectedAt",
+        "headcount",
+        "localDensity",
+        "localCongestionLevel",
+        "configVersion",
+    }
+
+
+@pytest.mark.parametrize("status", [200, 201])
+def test_event_accepts_200_and_201(status):
+    client = SafeRouteDeviceClient(
+        "http://server",
+        AuthHeaderProvider("token"),
+        request=lambda *a, **k: Response(status),
+    )
+
+    assert client.report_event(congestion_event())
+
+
+@pytest.mark.parametrize("first_outcome", [500, TimeoutError()])
+def test_event_retry_keeps_event_id_detected_at_and_payload(first_outcome):
+    calls = []
+    outcomes = iter([first_outcome, 201])
+
+    def request(*args, **kwargs):
+        calls.append(kwargs["json"].copy())
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return Response(outcome)
+
+    client = SafeRouteDeviceClient(
+        "http://server",
+        AuthHeaderProvider("token"),
+        max_retries=1,
+        request=request,
+        sleeper=lambda _: None,
+    )
+
+    assert client.report_event(congestion_event())
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert calls[0]["eventId"] == "congestion-event-1"
+    assert calls[0]["detectedAt"] == 1_000
+
+
+def test_event_terminal_4xx_is_not_retried_or_queued():
+    calls = []
+    client = SafeRouteDeviceClient(
+        "http://server",
+        AuthHeaderProvider("token"),
+        max_retries=3,
+        request=lambda *a, **k: calls.append(k["json"]) or Response(400),
+        sleeper=lambda _: None,
+    )
+    event = congestion_event()
+
+    assert not client.report_event(event)
+    assert len(calls) == 1
+    assert not client.should_queue_failure(event.event_id)
 
 
 def test_configurable_auth_header():
