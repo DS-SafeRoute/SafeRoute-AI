@@ -80,6 +80,7 @@ def test_failed_event_keeps_uploaded_image_until_replay_succeeds(tmp_path):
     assert queued_event.payload["eventImageKey"].endswith("event.jpg")
     original_event = queued_event.payload["eventPayload"]
 
+    pipeline._config = config
     pipeline._maybe_flush_queue(1)
 
     remaining = queue.peek_oldest()

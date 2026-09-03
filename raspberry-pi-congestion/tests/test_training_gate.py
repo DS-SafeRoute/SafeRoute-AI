@@ -2,7 +2,13 @@ import numpy as np
 
 from raspberry_pi_congestion.api_client import LoggingCongestionReporter
 from raspberry_pi_congestion.app import CongestionPipeline
-from raspberry_pi_congestion.models import DeviceCongestionConfig, Point
+from raspberry_pi_congestion.models import (
+    CongestionThresholds,
+    DeviceCongestionConfig,
+    EventDetectionSettings,
+    Point,
+)
+from raspberry_pi_congestion.offline_queue import OfflineQueue
 from raspberry_pi_congestion.roi_counter import RoiCounter
 from raspberry_pi_congestion.window_aggregator import WindowAggregator
 
@@ -59,3 +65,68 @@ def test_inactive_training_stops_inference_and_upload_work():
     assert aggregator.window_sec == 7
     assert pipeline.target_fps == 2
     assert source.closed and detector.closed
+
+
+def test_inactive_training_discards_previous_session_queue(tmp_path):
+    source, detector, provider = Source(), Detector(), InactiveProvider()
+    queue = OfflineQueue(str(tmp_path / "queue.db"))
+    queue.enqueue(
+        "old-observation",
+        {"eventId": "old-observation", "trainingSessionId": "old-session"},
+    )
+    pipeline = CongestionPipeline(
+        source,
+        detector,
+        RoiCounter([Point(0, 0), Point(1, 0), Point(1, 1), Point(0, 1)]),
+        WindowAggregator(),
+        LoggingCongestionReporter(),
+        "CCTV_001",
+        offline_queue=queue,
+        config_provider=provider,
+    )
+
+    pipeline._maybe_refresh_config(0)
+
+    assert queue.size() == 0
+    pipeline.close()
+
+
+class ActiveProvider:
+    def fetch_config(self, code):
+        return DeviceCongestionConfig(
+            True,
+            "550e8400-e29b-41d4-a716-446655440000",
+            code,
+            1,
+            monitored_area_m2=1,
+            thresholds=CongestionThresholds(1, 2, 3),
+            event_detection=EventDetectionSettings(1, 1, 0),
+        )
+
+
+def test_new_training_session_discards_other_session_queue(tmp_path):
+    source, detector, provider = Source(), Detector(), ActiveProvider()
+    queue = OfflineQueue(str(tmp_path / "queue.db"))
+    queue.enqueue("old", {"eventId": "old", "trainingSessionId": "old-session"})
+    queue.enqueue(
+        "current",
+        {
+            "eventId": "current",
+            "trainingSessionId": "550e8400-e29b-41d4-a716-446655440000",
+        },
+    )
+    pipeline = CongestionPipeline(
+        source,
+        detector,
+        RoiCounter([Point(0, 0), Point(1, 0), Point(1, 1), Point(0, 1)]),
+        WindowAggregator(),
+        LoggingCongestionReporter(),
+        "CCTV_001",
+        offline_queue=queue,
+        config_provider=provider,
+    )
+
+    pipeline._maybe_refresh_config(0)
+
+    assert [item.event_id for item in queue.peek_oldest()] == ["current"]
+    pipeline.close()

@@ -51,6 +51,7 @@ class CongestionPipeline:
         self._closed = False
         self._preview_stop_requested = False
         self._event_detector = CongestionEventDetector()
+        self._monitoring_frame = None
         # Only local/test pipelines use this fallback. Server modes always poll BE.
         self._config = None if config_provider else DeviceCongestionConfig(
             True, "local-dry-run", cctv_code, 1, 1.0, aggregator.window_sec,
@@ -78,6 +79,7 @@ class CongestionPipeline:
         config = self._config
         if config is None or not config.training_active or not config.training_session_id:
             return None
+        captured_at_ms = self._epoch_ms()
         try:
             detections = self.detector.detect(frame)
         except Exception as exc:
@@ -95,16 +97,20 @@ class CongestionPipeline:
                 detections,
                 inside_detections,
             )
-        now_ms = self._epoch_ms()
-        self._process_local_event(frame, count, now_ms, config)
-        self.aggregator.add_sample(count, now_ms)
-        if not self.aggregator.should_flush():
-            return None
-        summary = self.aggregator.flush(now_ms)
+        self._process_local_event(frame, count, captured_at_ms, config)
+        summary = self.aggregator.add_sample(count, captured_at_ms)
         if summary is None:
+            self._monitoring_frame = self._copy_frame(frame)
+            return None
+        monitoring_frame = self._monitoring_frame
+        self._monitoring_frame = self._copy_frame(frame)
+        if monitoring_frame is None:
+            logger.error("Completed observation window has no monitoring frame")
             return None
         event_id = str(uuid.uuid4())
-        image_key = self._upload_snapshot(frame, "MONITORING", event_id, now_ms, config)
+        image_key = self._upload_snapshot(
+            monitoring_frame, "MONITORING", event_id, summary.captured_at_ms, config
+        )
         observation = CongestionObservation.from_summary(
             event_id, config.training_session_id, self.cctv_code,
             config.config_version, summary, image_key,
@@ -112,8 +118,15 @@ class CongestionPipeline:
         reported = self.reporter.report(observation)
         retryable = not hasattr(self.reporter, "should_queue_failure") or self.reporter.should_queue_failure(observation.event_id)
         if not reported and retryable and self.offline_queue is not None:
-            self.offline_queue.enqueue(observation.event_id, observation.to_json(), "observation")
+            self.offline_queue.enqueue(
+                observation.event_id, observation.to_json(), "observation",
+                config.training_session_id,
+            )
         return observation
+
+    @staticmethod
+    def _copy_frame(frame):
+        return frame.copy() if hasattr(frame, "copy") else frame
 
     def _process_local_event(self, frame, count: int, now_ms: int,
                              config: DeviceCongestionConfig) -> None:
@@ -150,13 +163,18 @@ class CongestionPipeline:
                     "eventImageKey": image_key,
                     "uploadedAt": self._epoch_ms(),
                 })
-            self.offline_queue.enqueue(event.event_id, queued_payload, "event")
+            self.offline_queue.enqueue(
+                event.event_id, queued_payload, "event", config.training_session_id
+            )
         if reported and image_key:
             attached = client.attach_event_image(event.event_id, image_key, self._epoch_ms())
             retryable_image = not hasattr(client, "should_queue_failure") or client.should_queue_failure(f"image:{event.event_id}")
             if not attached and retryable_image and self.offline_queue is not None:
                 payload = {"eventId": event.event_id, "eventImageKey": image_key, "uploadedAt": self._epoch_ms()}
-                self.offline_queue.enqueue(f"image:{event.event_id}", payload, "event_image")
+                self.offline_queue.enqueue(
+                    f"image:{event.event_id}", payload, "event_image",
+                    config.training_session_id,
+                )
 
     def _upload_snapshot(self, frame, image_type: str, reference_id: str,
                          captured_at: int, config: DeviceCongestionConfig) -> Optional[str]:
@@ -201,16 +219,32 @@ class CongestionPipeline:
                 or previous.training_active != new_config.training_active or session_changed):
             # 비활성 상태에서는 사용하지 않더라도 최신 값을 저장해 이전 세션 설정이 남지 않게 한다.
             self.aggregator.reconfigure(new_config.snapshot_interval_sec)
+            self._monitoring_frame = None
             self.target_fps = new_config.target_inference_fps
             logger.info("Applied congestion config version %d", new_config.config_version)
         if session_changed or not new_config.training_active:
             self._event_detector.reset()
+        if self.offline_queue is not None:
+            if not new_config.training_active or not new_config.training_session_id:
+                discarded = self.offline_queue.clear()
+            elif session_changed:
+                discarded = self.offline_queue.discard_except_session(
+                    new_config.training_session_id
+                )
+            else:
+                discarded = 0
+            if discarded:
+                logger.info("Discarded %d queued operations from an inactive training session", discarded)
 
     def _maybe_flush_queue(self, now: float) -> None:
         if self.offline_queue is None or now - self._last_queue_flush < self.flush_interval_sec:
             return
+        config = self._config
+        if config is None or not config.training_active or not config.training_session_id:
+            return
         self._last_queue_flush = now
-        for item in self.offline_queue.peek_oldest(limit=5):
+        for item in self.offline_queue.peek_oldest(
+                limit=5, training_session_id=config.training_session_id):
             if item.operation == "event" and hasattr(self.reporter, "report_event_json"):
                 event_payload = item.payload.get("eventPayload", item.payload)
                 success = self.reporter.report_event_json(event_payload)
@@ -227,7 +261,8 @@ class CongestionPipeline:
                         "uploadedAt": item.payload["uploadedAt"],
                     }
                     self.offline_queue.enqueue(
-                        f"image:{item.event_id}", image_payload, "event_image"
+                        f"image:{item.event_id}", image_payload, "event_image",
+                        item.training_session_id,
                     )
                 self.offline_queue.mark_success(item.id)
             else:

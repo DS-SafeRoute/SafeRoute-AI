@@ -83,19 +83,19 @@ def test_fake_detector_pipeline_and_resource_cleanup():
     detector.closed = False
     detector.close = lambda: setattr(detector, "closed", True)
     reporter = Reporter()
-    aggregator = WindowAggregator(5, clock)
+    aggregator = WindowAggregator(5)
     pipeline = CongestionPipeline(source, detector, RoiCounter([Point(0, 0), Point(1, 0), Point(1, 1), Point(0, 1)]),
                                   aggregator, reporter, "CCTV_TEST", target_fps=0,
                                   monotonic=clock, epoch_ms=lambda: 6000)
-    aggregator.add_sample(1, 1000)
-    clock.value = 5
+    pipeline.process_frame(frame)
+    pipeline._epoch_ms = lambda: 10_000
     pipeline.run()
-    assert reporter.items[0].sample_count == 2
+    assert reporter.items[0].sample_count == 1
     assert reporter.items[0].cctv_code == "CCTV_TEST"
     assert source.closed and detector.closed
 
 
-def test_realtime_file_pipeline_emits_five_second_window():
+def test_realtime_file_pipeline_emits_epoch_aligned_window():
     clock = Clock()
     frame = np.zeros((100, 100, 3), dtype=np.uint8)
     capture = Capture([frame.copy() for _ in range(26)], fps=5)
@@ -109,7 +109,7 @@ def test_realtime_file_pipeline_emits_five_second_window():
         source,
         detector,
         RoiCounter([Point(0, 0), Point(1, 0), Point(1, 1), Point(0, 1)]),
-        WindowAggregator(5, clock),
+        WindowAggregator(5),
         reporter,
         "CCTV_TEST",
         target_fps=0,
@@ -120,9 +120,34 @@ def test_realtime_file_pipeline_emits_five_second_window():
     pipeline.run()
 
     assert len(reporter.items) == 1
-    assert reporter.items[0].sample_count == 26
-    assert reporter.items[0].window_end - reporter.items[0].window_start == 5_000
+    assert reporter.items[0].sample_count == 20
+    assert (reporter.items[0].window_start, reporter.items[0].window_end) == (0, 5_000)
+    assert reporter.items[0].captured_at == 4_800
     assert capture.released
+
+
+def test_zero_detection_frames_are_reported_as_zero_headcount():
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    reporter = Reporter()
+    timestamps = iter([1_000, 2_000, 5_000])
+    pipeline = CongestionPipeline(
+        Source(frame),
+        FakePersonDetector([]),
+        RoiCounter([Point(0, 0), Point(1, 0), Point(1, 1), Point(0, 1)]),
+        WindowAggregator(5),
+        reporter,
+        "CCTV_TEST",
+        target_fps=0,
+        epoch_ms=lambda: next(timestamps),
+    )
+
+    pipeline.process_frame(frame)
+    pipeline.process_frame(frame)
+    observation = pipeline.process_frame(frame)
+
+    assert observation.avg_headcount == 0
+    assert observation.peak_headcount == 0
+    assert observation.sample_count == 2
 
 
 def test_preview_receives_detections_and_can_stop_pipeline():
@@ -135,7 +160,7 @@ def test_preview_receives_detections_and_can_stop_pipeline():
         source,
         detector,
         RoiCounter([Point(0, 0), Point(1, 0), Point(1, 1), Point(0, 1)]),
-        WindowAggregator(5, clock),
+        WindowAggregator(5),
         Reporter(),
         "CCTV_TEST",
         target_fps=0,

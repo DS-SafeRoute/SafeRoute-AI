@@ -1,7 +1,7 @@
 [Unit]
 Description=SafeRoute Raspberry Pi Congestion Detector
-After=network-online.target
-Wants=network-online.target
+After=network-online.target systemd-time-wait-sync.service time-sync.target
+Wants=network-online.target systemd-time-wait-sync.service
 
 [Service]
 Type=simple
