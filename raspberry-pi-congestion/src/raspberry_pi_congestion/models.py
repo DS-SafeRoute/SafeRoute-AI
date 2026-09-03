@@ -40,6 +40,7 @@ class Detection:
 class WindowSummary:
     window_start_ms: int
     window_end_ms: int
+    captured_at_ms: int
     sample_count: int
     avg_headcount: float
     peak_headcount: int
@@ -72,7 +73,7 @@ class CongestionObservation:
             sample_count=summary.sample_count,
             window_start=summary.window_start_ms,
             window_end=summary.window_end_ms,
-            captured_at=summary.window_end_ms,
+            captured_at=summary.captured_at_ms,
             config_version=config_version,
             monitoring_image_key=monitoring_image_key,
         )
