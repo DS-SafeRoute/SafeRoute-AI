@@ -8,8 +8,9 @@ Raspberry Pi가 CCTV 영상의 ROI 안 사람 수를 5 FPS로 추론하고, Spri
 - `GET /api/v1/device/congestion-config?cctvCode=...`를 훈련 중 5초, 비활성 중 15초 간격으로 조회한다.
 - `trainingSessionId`는 BE가 준 UUID를 그대로 사용한다. Pi가 세션 ID를 생성하지 않는다.
 - `trainingActive=false`이면 추론, 관측값, 이벤트, 이미지 인코딩·업로드, Presigned URL 요청을 중단한다.
+- 파일 입력은 `trainingActive=true`가 될 때까지 재생을 시작하지 않으며, 처리 속도가 원본 FPS보다 느려도 프레임을 폐기하지 않는다.
 - `configVersion` 또는 세션/활성 상태가 바뀌면 집계 창, 추론 FPS, 임계값과 이벤트 설정을 즉시 적용한다.
-- 밀도는 `headcount / monitoredAreaM2`로 계산하고 단계 임계값은 BE 응답만 사용한다.
+- ROI 필터 없이 전체 화면의 사람 수를 집계하고, `headcount / monitoredAreaM2` 밀도를 BE 임계값과 비교한다.
 - 혼잡 진입/상승은 기본 3프레임, 정상 복귀는 5프레임 연속 조건이며 단계 상승은 cooldown과 무관하게 즉시 보낸다.
 - 모든 시간 필드는 Unix timestamp 밀리초다.
 
@@ -104,7 +105,6 @@ python -c "import hailo_platform; print('hailo_platform import 성공')"
 RUN_MODE=dry-run
 CCTV_CODE=CCTV_001
 VIDEO_SOURCE=rtsp://{USER}:{PASSWORD}@{CCTV_IP}:554/{STREAM_PATH}
-ROI_CONFIG_PATH=./config/roi/CCTV_001.json
 DETECTOR_BACKEND=hailo
 MODEL_PATH=/실제/모델/경로/model.hef
 DETECTOR_CONF_THRESHOLD=0.4
@@ -120,16 +120,10 @@ python -m raspberry_pi_congestion.main dry-run
 `CCTV_001`, `CCTV_002`를 각각 검증한 뒤 `RUN_MODE=rtsp`로 백엔드 통합
 테스트를 수행한다. RTSP URL, 카메라 비밀번호, 장치 토큰은 커밋하지 않는다.
 
-개발 PC에서 추론 화면을 확인하려면 `SHOW_PREVIEW=true`를 설정한다. 노란색은 ROI,
-초록색 박스는 ROI 안에서 집계된 사람, 주황색 박스는 ROI 밖 사람이다. 창에서 `Q` 또는
-`Esc`를 누르면 파이프라인과 미리보기 창이 함께 종료된다. 기본값은 `false`이며 전송용
-JPEG에는 오버레이가 포함되지 않는다.
-
-ROI는 CCTV별 파일로 저장한다. `ROI_CONFIG_PATH`를 생략하면 `./config/roi/CCTV_001.json`처럼 장치 코드 기반 경로를 사용한다.
-
-```powershell
-python -m raspberry_pi_congestion.main setup-roi
-```
+개발 PC에서 추론 화면을 확인하려면 `SHOW_PREVIEW=true`를 설정한다. 초록색 박스는
+집계된 사람이다. 창에서 `Q` 또는
+`Esc`를 누르면 파이프라인과 미리보기 창이 함께 종료된다. 기본값은 `false`이다.
+전송용 JPEG에는 사람 박스와 전체 인원만 표시되며 ROI 선은 표시되지 않는다.
 
 서버 없이 검출/집계를 확인하려면 `dry-run` 또는 `test` 모드를 사용한다. 이 두 모드만 로컬 기본 설정을 사용하며 운영 모드는 반드시 BE 설정을 조회한다.
 

@@ -12,7 +12,6 @@ def test_default_paths_follow_project_directory_structure():
         }
     )
 
-    assert config.roi_config_path == "./config/roi/CCTV_ENTRANCE_01.json"
     assert config.model_path is None
     assert config.file_realtime
     assert config.file_fallback_fps == 30

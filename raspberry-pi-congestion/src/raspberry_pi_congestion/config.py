@@ -14,7 +14,6 @@ class ConfigError(RuntimeError):
 class AppConfig:
     mode: str
     video_source: str
-    roi_config_path: str
     cctv_code: str
     detector_backend: str
     model_path: Optional[str]
@@ -69,8 +68,6 @@ class AppConfig:
         config_poll_active_sec = positive_float("CONFIG_POLL_ACTIVE_SEC", "5")
         config_poll_inactive_sec = positive_float("CONFIG_POLL_INACTIVE_SEC", "15")
         file_fallback_fps = positive_float("FILE_FALLBACK_FPS", "30")
-        if cctv_code not in {"CCTV_001", "CCTV_002"} and selected_mode not in {"dry-run", "test", "setup-roi"}:
-            raise ConfigError("CCTV_CODE must be CCTV_001 or CCTV_002")
         if selected_mode in {"file", "rtsp"} and not server:
             raise ConfigError("SAFEROUTE_SERVER_BASE_URL is required for server reporting modes")
         if selected_mode in {"file", "rtsp"} and not e.get("DEVICE_AUTH_TOKEN"):
@@ -87,8 +84,7 @@ class AppConfig:
         except ValueError as exc:
             raise ConfigError("RELAY_PORT must be an integer") from exc
         return AppConfig(
-            mode=selected_mode, video_source=required("VIDEO_SOURCE"),
-            roi_config_path=e.get("ROI_CONFIG_PATH", f"./config/roi/{cctv_code}.json"), cctv_code=cctv_code,
+            mode=selected_mode, video_source=required("VIDEO_SOURCE"), cctv_code=cctv_code,
             detector_backend=e.get("DETECTOR_BACKEND", "ultralytics"), model_path=e.get("MODEL_PATH"),
             detector_conf_threshold=float(e.get("DETECTOR_CONF_THRESHOLD", "0.4")),
             target_inference_fps=float(e.get("TARGET_INFERENCE_FPS", "5")), window_sec=float(e.get("WINDOW_SEC", "5")),

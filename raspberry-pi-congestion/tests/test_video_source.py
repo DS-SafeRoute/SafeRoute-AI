@@ -93,7 +93,7 @@ def test_file_loop_reopens_capture_and_resets_pacing():
     assert clock.sleeps == [0.5]
 
 
-def test_file_skips_frames_that_are_older_than_playback_clock():
+def test_file_keeps_frames_that_are_older_than_playback_clock():
     cap = Capture(list(range(10)), fps=10)
     clock = Clock()
     source = FileVideoSource(
@@ -104,8 +104,8 @@ def test_file_skips_frames_that_are_older_than_playback_clock():
 
     assert next(frames) == 0
     clock.value = 0.35
-    assert next(frames) == 3
-    assert source.current_position_ms == pytest.approx(300)
+    assert list(frames) == list(range(1, 10))
+    assert source.current_position_ms == pytest.approx(900)
     source.close()
 
 

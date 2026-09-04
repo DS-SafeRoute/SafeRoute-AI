@@ -21,3 +21,8 @@ def test_bottom_center_inside_outside_and_boundary(detection, expected):
 def test_box_center_inside_but_bottom_center_outside():
     detection = Detection(400, 500, 600, 900, .9)
     assert RoiCounter(ROI).count_inside([detection], 1000, 1000) == 0
+
+
+def test_no_roi_counts_every_detection():
+    detections = [det(100, 100), det(900, 900)]
+    assert RoiCounter().filter_inside(detections, 1000, 1000) == detections

@@ -24,6 +24,18 @@ class Source:
         self.closed = True
 
 
+class PausableFileSource(Source):
+    pause_when_training_inactive = True
+
+    def __init__(self):
+        super().__init__()
+        self.frames_read = 0
+
+    def frames(self):
+        self.frames_read += 1
+        yield np.zeros((10, 10, 3), dtype=np.uint8)
+
+
 class Detector:
     def __init__(self):
         self.calls = 0
@@ -65,6 +77,47 @@ def test_inactive_training_stops_inference_and_upload_work():
     assert aggregator.window_sec == 7
     assert pipeline.target_fps == 2
     assert source.closed and detector.closed
+
+
+def test_file_frame_is_not_consumed_until_training_becomes_active():
+    class Provider:
+        def __init__(self):
+            self.calls = 0
+
+        def fetch_config(self, code):
+            self.calls += 1
+            if self.calls == 1:
+                return DeviceCongestionConfig(False, None, code, 1)
+            return DeviceCongestionConfig(
+                True, "550e8400-e29b-41d4-a716-446655440000", code, 2,
+                monitored_area_m2=1,
+                thresholds=CongestionThresholds(1, 2, 3),
+                event_detection=EventDetectionSettings(1, 1, 0),
+            )
+
+    class Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def __call__(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    source, detector, provider, clock = PausableFileSource(), Detector(), Provider(), Clock()
+    pipeline = CongestionPipeline(
+        source, detector, RoiCounter([Point(0, 0), Point(1, 0), Point(1, 1), Point(0, 1)]),
+        WindowAggregator(), LoggingCongestionReporter(), "CCTV_001",
+        config_provider=provider, config_poll_inactive_sec=1,
+        monotonic=clock, sleeper=clock.sleep,
+    )
+
+    pipeline.run()
+
+    assert provider.calls == 2
+    assert source.frames_read == 1
+    assert detector.calls == 1
 
 
 def test_inactive_training_discards_previous_session_queue(tmp_path):

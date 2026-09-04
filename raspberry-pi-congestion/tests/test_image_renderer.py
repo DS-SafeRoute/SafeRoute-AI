@@ -19,7 +19,7 @@ def test_renderer_draws_person_bbox_without_mutating_source_frame():
     assert rendered[40, 40].tolist() == [0, 255, 0]
 
 
-def test_renderer_marks_detection_outside_counting_roi_separately():
+def test_renderer_does_not_draw_roi_or_mark_detections_as_outside():
     frame = np.zeros((120, 160, 3), dtype=np.uint8)
     detection = Detection(40, 40, 100, 100, 0.91)
     renderer = OpenCvDetectionRenderer(
@@ -28,4 +28,5 @@ def test_renderer_marks_detection_outside_counting_roi_separately():
 
     rendered = renderer.render(frame, [detection], [])
 
-    assert rendered[40, 40].tolist() == [0, 128, 255]
+    assert rendered[40, 40].tolist() == [0, 255, 0]
+    assert rendered[0, 0].tolist() == [0, 0, 0]

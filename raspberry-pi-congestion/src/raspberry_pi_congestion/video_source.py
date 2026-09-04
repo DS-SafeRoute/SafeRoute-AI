@@ -24,6 +24,9 @@ class VideoSource(ABC):
 
 
 class FileVideoSource(VideoSource):
+    # 서버 훈련이 활성화될 때까지 녹화 영상의 첫 프레임을 보존한다.
+    pause_when_training_inactive = True
+
     def __init__(self, path: str, loop: bool = False, realtime: bool = True,
                  fallback_fps: float = 30.0, capture_factory: Optional[Callable] = None,
                  monotonic: Callable[[], float] = time.monotonic,
@@ -57,9 +60,6 @@ class FileVideoSource(VideoSource):
                 if self.realtime:
                     due_at = playback_started_at + (position_ms - segment_start_ms) / 1000.0
                     now = self._monotonic()
-                    if due_at < now - self._frame_interval_sec:
-                        # 디코딩/추론이 원본 영상보다 뒤처졌다면 과거 프레임은 내보내지 않는다.
-                        continue
                     delay = due_at - now
                     if delay > 0:
                         self._sleep(delay)

@@ -75,7 +75,7 @@ def test_failed_event_keeps_uploaded_image_until_replay_succeeds(tmp_path):
         1,
         monitored_area_m2=1,
         thresholds=CongestionThresholds(1, 2, 3),
-        event_detection=EventDetectionSettings(1, 1, 30),
+        event_detection=EventDetectionSettings(3, 1, 30),
     )
 
     pipeline._ensure_delivery_session(config.training_session_id)

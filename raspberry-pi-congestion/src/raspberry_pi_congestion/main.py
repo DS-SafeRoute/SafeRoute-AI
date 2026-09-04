@@ -13,20 +13,10 @@ from .offline_queue import OfflineQueue
 from .preview import OpenCvPreview
 from .relay import LightCommandExecutor, RelayController, RelayControllerError
 from .roi_counter import RoiCounter
-from .roi_provider import InteractiveRoiSelector, JsonRoiProvider
 from .video_source import FileVideoSource, create_video_source
 from .window_aggregator import WindowAggregator
 
 logger = logging.getLogger(__name__)
-
-
-def _setup_roi(config: AppConfig) -> None:
-    source = FileVideoSource(config.video_source)
-    try:
-        frame = next(source.frames())
-        JsonRoiProvider(config.roi_config_path).save(InteractiveRoiSelector().select(frame))
-    finally:
-        source.close()
 
 
 def _start_light_command_executor(config: AppConfig, device_client: SafeRouteDeviceClient) -> None:
@@ -60,7 +50,7 @@ def main(argv=None) -> int:
     except ImportError:
         pass
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", nargs="?", choices=["setup-roi", "dry-run", "file", "rtsp", "test"])
+    parser.add_argument("mode", nargs="?", choices=["dry-run", "file", "rtsp", "test"])
     args = parser.parse_args(argv)
     try:
         config = AppConfig.from_env(mode=args.mode)
@@ -68,9 +58,6 @@ def main(argv=None) -> int:
         print(f"[FATAL] {exc}", file=sys.stderr)
         return 2
     logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    if config.mode == "setup-roi":
-        _setup_roi(config)
-        return 0
     device_client = None if config.mode in {"dry-run", "test"} else SafeRouteDeviceClient(
         config.server_base_url or "",
         AuthHeaderProvider(config.device_auth_token, config.auth_header_name, config.auth_header_prefix),
@@ -91,9 +78,8 @@ def main(argv=None) -> int:
     else:
         detector = create_detector(config)
     queue = None if config.mode in {"dry-run", "test"} else OfflineQueue(config.offline_queue_db_path, config.offline_queue_max_age_sec, config.offline_queue_max_items)
-    roi = JsonRoiProvider(config.roi_config_path).load()
-    preview = OpenCvPreview(roi) if config.show_preview else None
-    pipeline = CongestionPipeline(source, detector, RoiCounter(roi),
+    preview = OpenCvPreview(()) if config.show_preview else None
+    pipeline = CongestionPipeline(source, detector, RoiCounter(),
                                   WindowAggregator(config.window_sec), reporter, config.cctv_code, queue,
                                   config.target_inference_fps, config.offline_flush_interval_sec,
                                   config_provider=device_client,

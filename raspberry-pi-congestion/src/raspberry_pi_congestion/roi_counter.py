@@ -1,20 +1,22 @@
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Optional, Sequence
 
 from .models import Detection, Point
 
 
 class RoiCounter:
-    def __init__(self, roi: Sequence[Point]) -> None:
-        if len(roi) < 3:
+    def __init__(self, roi: Optional[Sequence[Point]] = None) -> None:
+        if roi is not None and len(roi) < 3:
             raise ValueError("ROI requires at least three points")
-        self.roi = list(roi)
+        self.roi = list(roi) if roi is not None else []
 
     def count_inside(self, detections: Sequence[Detection], frame_width: int, frame_height: int) -> int:
         return len(self.filter_inside(detections, frame_width, frame_height))
 
     def filter_inside(self, detections: Sequence[Detection], frame_width: int, frame_height: int) -> list[Detection]:
+        if not self.roi:
+            return list(detections)
         return [d for d in detections if self._point_in_polygon(d.bottom_center(frame_width, frame_height), self.roi)]
 
     @staticmethod
