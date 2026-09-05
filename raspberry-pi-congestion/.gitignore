@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+device-configs/*.env
 
 # Virtual environments and IDE files
 .venv/
