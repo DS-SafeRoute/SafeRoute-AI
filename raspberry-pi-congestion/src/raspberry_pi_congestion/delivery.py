@@ -274,7 +274,8 @@ class DeliveryQueue:
             return
         observation = CongestionObservation.from_summary(
             job.event_id, job.training_session_id, job.cctv_code,
-            job.config_version, job.summary, image_key,
+            job.config_version, job.summary,
+            len(job.snapshot.inside_detections), image_key,
         )
         reported = self.client.report(observation)
         if not self._session_active(job.training_session_id):
@@ -356,6 +357,7 @@ class DeliveryQueue:
             observation = CongestionObservation.from_summary(
                 job.event_id, job.training_session_id, job.cctv_code,
                 job.config_version, job.summary,
+                len(job.snapshot.inside_detections),
             )
             rendered = self.renderer.render(
                 job.snapshot.frame, job.snapshot.detections, job.snapshot.inside_detections

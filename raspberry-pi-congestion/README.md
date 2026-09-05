@@ -11,6 +11,7 @@ Raspberry Pi가 CCTV 영상의 ROI 안 사람 수를 5 FPS로 추론하고, Spri
 - 파일 입력은 `trainingActive=true`가 될 때까지 재생을 시작하지 않으며, 처리 속도가 원본 FPS보다 느려도 프레임을 폐기하지 않는다.
 - `configVersion` 또는 세션/활성 상태가 바뀌면 집계 창, 추론 FPS, 임계값과 이벤트 설정을 즉시 적용한다.
 - ROI 필터 없이 전체 화면의 사람 수를 집계하고, `headcount / monitoredAreaM2` 밀도를 BE 임계값과 비교한다.
+- 모니터링 이미지와 같은 Snapshot의 집계 인원은 `frameHeadcount`로 보내며, 이미지 오버레이의 `headcount`와 항상 일치한다.
 - 혼잡 진입/상승은 기본 3프레임, 정상 복귀는 5프레임 연속 조건이며 단계 상승은 cooldown과 무관하게 즉시 보낸다.
 - 모든 시간 필드는 Unix timestamp 밀리초다.
 
@@ -23,6 +24,7 @@ Raspberry Pi가 CCTV 영상의 ROI 안 사람 수를 5 FPS로 추론하고, Spri
   "cctvCode": "CCTV_001",
   "avgHeadcount": 4.75,
   "peakHeadcount": 8,
+  "frameHeadcount": 7,
   "sampleCount": 25,
   "windowStart": 1786500000000,
   "windowEnd": 1786500005000,
@@ -31,6 +33,11 @@ Raspberry Pi가 CCTV 영상의 ROI 안 사람 수를 5 FPS로 추론하고, Spri
   "configVersion": 1
 }
 ```
+
+`avgHeadcount`와 `peakHeadcount`는 5초 관측 구간의 평균과 최대값이고,
+`frameHeadcount`는 `monitoringImageKey`가 가리키는 단일 이미지의 인원수다.
+BE는 상세 모니터링 프레임의 인원수와 밀집도를 `frameHeadcount` 기준으로 제공하고,
+현재 혼잡 상태와 경로 계산에는 기존 구간 평균을 계속 사용할 수 있다.
 
 혼잡 이벤트에는 `edgeId`와 `eventImageKey`를 넣지 않는다. 이벤트 POST와 이미지 업로드를 병렬 처리한 뒤, 둘 다 성공하면 `PATCH /api/v1/device/congestion-events/{eventId}/image`로 BE가 발급한 `objectKey`를 연결한다.
 
