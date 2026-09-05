@@ -67,7 +67,10 @@ def main(argv=None) -> int:
     except ConfigError as exc:
         print(f"[FATAL] {exc}", file=sys.stderr)
         return 2
-    logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=getattr(logging, config.log_level.upper(), logging.INFO),
+        format=f"%(asctime)s %(levelname)s [{config.cctv_code}] %(name)s: %(message)s",
+    )
     if config.mode == "setup-roi":
         _setup_roi(config)
         return 0
