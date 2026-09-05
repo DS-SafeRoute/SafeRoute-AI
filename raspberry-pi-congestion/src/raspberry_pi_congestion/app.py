@@ -145,6 +145,7 @@ class CongestionPipeline:
         observation = CongestionObservation.from_summary(
             event_id, config.training_session_id, self.cctv_code,
             config.config_version, summary,
+            len(monitoring_snapshot.inside_detections),
         )
         self.delivery_queue.submit_monitoring(MonitoringDelivery(
             event_id, config.training_session_id, self.cctv_code,

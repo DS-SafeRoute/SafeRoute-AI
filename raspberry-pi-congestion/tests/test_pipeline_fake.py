@@ -147,6 +147,7 @@ def test_zero_detection_frames_are_reported_as_zero_headcount():
 
     assert observation.avg_headcount == 0
     assert observation.peak_headcount == 0
+    assert observation.frame_headcount == 0
     assert observation.sample_count == 2
 
 

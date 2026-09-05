@@ -30,9 +30,11 @@ class BlockingRenderer:
 class Client:
     def __init__(self):
         self.delivered = []
+        self.observations = []
 
     def report(self, observation):
         self.delivered.append(("observation", observation.event_id))
+        self.observations.append(observation)
         return True
 
     def report_event(self, event):
@@ -81,6 +83,27 @@ def test_full_queue_drops_oldest_monitoring_and_sends_event_first():
         ("event", "important"),
         ("observation", "new"),
     ]
+    queue.close()
+
+
+def test_monitoring_reports_headcount_from_uploaded_snapshot():
+    client = Client()
+    queue = DeliveryQueue(client, PassthroughRenderer())
+    queue.set_session(SESSION)
+    job = MonitoringDelivery(
+        "frame-count", SESSION, "CCTV_001", 1,
+        WindowSummary(0, 5_000, 4_800, 25, 7.2, 10),
+        Snapshot(
+            np.zeros((4, 4, 3), dtype=np.uint8),
+            (object(),) * 3,
+            (object(),) * 2,
+        ),
+    )
+
+    assert queue.submit_monitoring(job)
+    assert queue.wait_idle()
+    assert client.observations[0].frame_headcount == 2
+    assert client.observations[0].peak_headcount == 10
     queue.close()
 
 

@@ -24,7 +24,10 @@ class Response:
 
 
 def observation():
-    return CongestionObservation("event-1", "session-uuid", "CCTV_001", 4.75, 8, 25, 1000, 6000, 6000, 1)
+    return CongestionObservation(
+        "event-1", "session-uuid", "CCTV_001", 4.75, 8, 7,
+        25, 1000, 6000, 6000, 1,
+    )
 
 
 def congestion_event():
@@ -43,7 +46,8 @@ def congestion_event():
 
 def test_request_contains_only_allowed_fields():
     body = observation().to_json()
-    assert set(body) == {"eventId", "trainingSessionId", "cctvCode", "avgHeadcount", "peakHeadcount", "sampleCount", "windowStart", "windowEnd", "capturedAt", "monitoringImageKey", "configVersion"}
+    assert set(body) == {"eventId", "trainingSessionId", "cctvCode", "avgHeadcount", "peakHeadcount", "frameHeadcount", "sampleCount", "windowStart", "windowEnd", "capturedAt", "monitoringImageKey", "configVersion"}
+    assert body["frameHeadcount"] == 7
     assert not ({"density", "congestionLevel", "edgeId", "sessionId", "monitoredAreaM2"} & set(body))
 
 
