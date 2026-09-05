@@ -57,7 +57,10 @@ def main(argv=None) -> int:
     except ConfigError as exc:
         print(f"[FATAL] {exc}", file=sys.stderr)
         return 2
-    logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=getattr(logging, config.log_level.upper(), logging.INFO),
+        format=f"%(asctime)s %(levelname)s [{config.cctv_code}] %(name)s: %(message)s",
+    )
     device_client = None if config.mode in {"dry-run", "test"} else SafeRouteDeviceClient(
         config.server_base_url or "",
         AuthHeaderProvider(config.device_auth_token, config.auth_header_name, config.auth_header_prefix),
