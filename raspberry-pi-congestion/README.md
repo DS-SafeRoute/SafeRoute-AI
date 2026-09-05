@@ -63,6 +63,44 @@ python -m raspberry_pi_congestion.main file
 python -m raspberry_pi_congestion.main rtsp
 ```
 
+### 여러 CCTV 동시 실행
+
+공용 `.env`에는 `SAFEROUTE_SERVER_BASE_URL`, 모델 설정처럼 모든 CCTV가 공유하는
+값을 둔다. `device-configs/CCTV.env.example`을 복사해 CCTV마다 별도 프로필을 만든다.
+
+```text
+device-configs/
+  CCTV_001.env
+  CCTV_002.env
+```
+
+각 프로필에는 장치별 값을 넣는다. DB에 저장된 해시가 아니라 CCTV 등록 시 발급된
+원본 토큰을 사용해야 한다.
+
+```dotenv
+CCTV_CODE=CCTV_001
+DEVICE_AUTH_TOKEN={CCTV_001 원본 토큰}
+VIDEO_SOURCE={CCTV_001_VIDEO_FILE}
+```
+
+아래 명령 하나로 `device-configs/*.env`의 CCTV를 각각 독립 프로세스로 실행한다.
+
+```powershell
+python -m raspberry_pi_congestion.multi_main file
+```
+
+특정 프로필만 실행하려면 `--device-env`를 반복 지정한다.
+
+```powershell
+python -m raspberry_pi_congestion.multi_main file `
+  --device-env device-configs/CCTV_001.env `
+  --device-env device-configs/CCTV_002.env
+```
+
+로그에는 `[CCTV_001]`처럼 장치 코드가 표시된다. `OFFLINE_QUEUE_DB_PATH`를
+생략하면 CCTV별 SQLite 파일을 자동으로 사용하고, 같은 큐 경로를 중복 지정하면
+실행 전에 오류로 막는다. `Ctrl+C`를 누르면 실행 중인 CCTV 프로세스를 모두 종료한다.
+
 ## Hailo NPU 실행
 
 현재 Hailo backend는 HailoRT 4.x 기반 Hailo-8/Hailo-8L과 다음 계약의
