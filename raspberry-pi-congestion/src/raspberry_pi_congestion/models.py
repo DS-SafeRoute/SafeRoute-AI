@@ -53,6 +53,7 @@ class CongestionObservation:
     cctv_code: str
     avg_headcount: float
     peak_headcount: int
+    frame_headcount: int
     sample_count: int
     window_start: int
     window_end: int
@@ -63,6 +64,7 @@ class CongestionObservation:
     @classmethod
     def from_summary(cls, event_id: str, training_session_id: str, cctv_code: str,
                      config_version: int, summary: WindowSummary,
+                     frame_headcount: int,
                      monitoring_image_key: Optional[str] = None) -> "CongestionObservation":
         return cls(
             event_id=event_id,
@@ -70,6 +72,7 @@ class CongestionObservation:
             cctv_code=cctv_code,
             avg_headcount=summary.avg_headcount,
             peak_headcount=summary.peak_headcount,
+            frame_headcount=frame_headcount,
             sample_count=summary.sample_count,
             window_start=summary.window_start_ms,
             window_end=summary.window_end_ms,
@@ -85,6 +88,7 @@ class CongestionObservation:
             "cctvCode": self.cctv_code,
             "avgHeadcount": self.avg_headcount,
             "peakHeadcount": self.peak_headcount,
+            "frameHeadcount": self.frame_headcount,
             "sampleCount": self.sample_count,
             "windowStart": self.window_start,
             "windowEnd": self.window_end,
