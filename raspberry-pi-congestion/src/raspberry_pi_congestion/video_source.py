@@ -39,6 +39,9 @@ class FileVideoSource(VideoSource):
 
     # 이만큼 이상 뒤처지면 프레임을 하나씩 grab하는 대신 목표 프레임으로 바로 탐색한다.
     seek_threshold_sec = 1.0
+    # 훈련이 비활성인 동안 파이프라인이 프레임을 소비하지 않고 재생을 멈춰 둔다.
+    # 그래서 녹화 영상은 훈련이 시작될 때 멈춘 위치(처음 시작이면 첫 프레임)부터 재생된다.
+    pause_when_training_inactive = True
 
     def __init__(self, path: str, loop: bool = False, realtime: bool = True,
                  fallback_fps: float = 30.0, capture_factory: Optional[Callable] = None,
@@ -59,6 +62,11 @@ class FileVideoSource(VideoSource):
             raise RuntimeError(f"Cannot open video file: {path}")
         self._frame_interval_sec = self._resolve_frame_interval()
         self.current_position_ms: Optional[float] = None
+        self._resume_requested = False
+
+    def resume_playback(self) -> None:
+        """멈춰 있던 재생을 이어 갈 때, 멈춘 시간만큼의 프레임을 밀린 것으로 보고 건너뛰지 않게 한다."""
+        self._resume_requested = True
 
     def frames(self) -> Iterator[object]:
         playback_started_at = self._monotonic()
@@ -66,6 +74,10 @@ class FileVideoSource(VideoSource):
         timeline_offset_ms = 0.0
         frame_index = 0
         while self._cap is not None:
+            if self._resume_requested:
+                self._resume_requested = False
+                # 다음 프레임이 지금 재생되도록 재생 시계를 다시 맞춘다.
+                playback_started_at = self._monotonic() - frame_index * self._frame_interval_sec
             if self.realtime:
                 frame_index = self._skip_late_frames(playback_started_at, frame_index)
             ok, frame = self._cap.read()

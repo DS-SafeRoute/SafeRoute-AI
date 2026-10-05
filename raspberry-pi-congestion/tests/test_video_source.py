@@ -207,6 +207,26 @@ def test_file_keeps_emitting_latest_frames_when_decoding_is_slower_than_playback
     source.close()
 
 
+def test_resumed_file_continues_from_paused_frame_instead_of_skipping_pause_time():
+    clock = Clock()
+    cap = SeekableCapture(100, fps=10)
+    source = FileVideoSource(
+        "video.mp4", capture_factory=lambda _: cap,
+        monotonic=clock, sleeper=clock.sleep,
+    )
+    frames = source.frames()
+
+    assert next(frames) == 0
+    clock.value = 30.0
+    source.resume_playback()
+
+    assert next(frames) == 1
+    assert cap.seeks == [] and cap.grabbed == []
+    assert next(frames) == 2
+    assert clock.value == pytest.approx(30.1)
+    source.close()
+
+
 def test_rtsp_reconnect_limit_and_backoff():
     captures = []
     def factory(_):

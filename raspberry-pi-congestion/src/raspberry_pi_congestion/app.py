@@ -36,7 +36,8 @@ class CongestionPipeline:
                  delivery_queue=None,
                  monitoring_jpeg_quality: int = 70,
                  monitoring_image_max_width: int = 960,
-                 delivery_monitoring_workers: int = 2) -> None:
+                 delivery_monitoring_workers: int = 2,
+                 sleeper: Callable[[float], None] = time.sleep) -> None:
         if max_presigned_refreshes < 0:
             raise ValueError("max_presigned_refreshes must not be negative")
         self.video_source = video_source
@@ -55,6 +56,7 @@ class CongestionPipeline:
         self.image_renderer = image_renderer or OpenCvDetectionRenderer(roi_counter.roi)
         self.max_presigned_refreshes = max_presigned_refreshes
         self._monotonic = monotonic
+        self._sleep = sleeper
         self._epoch_ms = epoch_ms
         self._last_inference = float("-inf")
         self._last_queue_flush = monotonic()
@@ -86,11 +88,28 @@ class CongestionPipeline:
 
     def run(self) -> None:
         try:
-            for frame in self.video_source.frames():
+            frames = iter(self.video_source.frames())
+            paused = False
+            while True:
                 now = self._monotonic()
                 self._maybe_refresh_config(now)
                 config = self._config
-                if config is None or not config.training_active:
+                training_active = config is not None and config.training_active
+                if not training_active and getattr(self.video_source, "pause_when_training_inactive", False):
+                    # 녹화 영상은 훈련이 활성화되기 전에는 프레임을 소비하지 않고 멈춰 둔다.
+                    paused = True
+                    self._sleep(self._inactive_config_wait(now))
+                    continue
+                if paused:
+                    paused = False
+                    resume = getattr(self.video_source, "resume_playback", None)
+                    if resume is not None:
+                        resume()
+                try:
+                    frame = next(frames)
+                except StopIteration:
+                    break
+                if not training_active:
                     continue
                 source_position_ms = self._source_position_ms()
                 if not self._should_infer(now, source_position_ms):
@@ -101,6 +120,10 @@ class CongestionPipeline:
                 self._maybe_flush_queue(now)
         finally:
             self.close()
+
+    def _inactive_config_wait(self, now: float) -> float:
+        next_poll_at = self._last_config_poll + self.config_poll_inactive_sec
+        return max(0.01, min(0.25, next_poll_at - now))
 
     def process_frame(self, frame, captured_at_ms: Optional[int] = None) -> Optional[CongestionObservation]:
         config = self._config

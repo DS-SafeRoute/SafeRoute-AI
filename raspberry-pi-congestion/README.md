@@ -8,6 +8,7 @@ Raspberry Pi가 CCTV 영상의 사람 수(기본은 화면 전체, ROI를 설정
 - `GET /api/v1/device/congestion-config?cctvCode=...`를 훈련 중 5초, 비활성 중 1초 간격으로 조회한다. 비활성 간격을 짧게 둬서 훈련 시작을 빨리 알아챈다.
 - `trainingSessionId`는 BE가 준 UUID를 그대로 사용한다. Pi가 세션 ID를 생성하지 않는다.
 - `trainingActive=false`이면 추론, 관측값, 이벤트, 이미지 인코딩·업로드, Presigned URL 요청을 중단한다.
+- 녹화 영상 입력은 `trainingActive=true`가 될 때까지 재생을 멈춰 두고, 훈련이 시작되면 멈춘 위치(처음이면 첫 프레임)부터 재생한다.
 - `configVersion` 또는 세션/활성 상태가 바뀌면 집계 창, 추론 FPS, 임계값과 이벤트 설정을 즉시 적용한다.
 - 밀도는 `headcount / monitoredAreaM2`로 계산하고 단계 임계값은 BE 응답만 사용한다.
 - 모니터링 이미지와 같은 Snapshot의 집계 인원은 `frameHeadcount`로 보내며, 이미지 오버레이의 `headcount`와 항상 일치한다.
