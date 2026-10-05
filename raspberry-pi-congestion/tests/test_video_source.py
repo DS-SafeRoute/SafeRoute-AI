@@ -109,6 +109,104 @@ def test_file_skips_frames_that_are_older_than_playback_clock():
     source.close()
 
 
+class SeekableCapture:
+    """인덱스로 위치를 관리해 grab/탐색 호출과 실제 디코딩(read)을 구분해 기록한다."""
+
+    def __init__(self, frame_count, fps, clock=None, read_cost_sec=0.0):
+        self.frame_count = frame_count
+        self.fps = fps
+        self.position = 0
+        self.clock = clock
+        self.read_cost_sec = read_cost_sec
+        self.decoded = []
+        self.grabbed = []
+        self.seeks = []
+
+    def isOpened(self):
+        return True
+
+    def read(self):
+        if self.position >= self.frame_count:
+            return False, None
+        if self.clock is not None:
+            self.clock.value += self.read_cost_sec
+        frame = self.position
+        self.decoded.append(frame)
+        self.position += 1
+        return True, frame
+
+    def grab(self):
+        if self.position >= self.frame_count:
+            return False
+        self.grabbed.append(self.position)
+        self.position += 1
+        return True
+
+    def set(self, prop, value):
+        assert prop == 1
+        self.seeks.append(value)
+        self.position = int(value)
+        return True
+
+    def get(self, prop):
+        return {5: self.fps, 7: self.frame_count}.get(prop, 0)
+
+    def release(self):
+        pass
+
+
+def test_file_skips_late_frames_without_decoding_them():
+    clock = Clock()
+    cap = SeekableCapture(10, fps=10)
+    source = FileVideoSource(
+        "video.mp4", capture_factory=lambda _: cap,
+        monotonic=clock, sleeper=clock.sleep,
+    )
+    frames = source.frames()
+
+    assert next(frames) == 0
+    clock.value = 0.35
+    assert next(frames) == 3
+    assert cap.grabbed == [1, 2]
+    assert cap.decoded == [0, 3]
+    assert cap.seeks == []
+    source.close()
+
+
+def test_file_seeks_directly_to_latest_frame_after_long_stall():
+    clock = Clock()
+    cap = SeekableCapture(100, fps=10)
+    source = FileVideoSource(
+        "video.mp4", capture_factory=lambda _: cap,
+        monotonic=clock, sleeper=clock.sleep,
+    )
+    frames = source.frames()
+
+    assert next(frames) == 0
+    clock.value = 2.53
+    assert next(frames) == 25
+    assert cap.seeks == [25]
+    assert cap.grabbed == []
+    assert source.current_position_ms == pytest.approx(2_500)
+    source.close()
+
+
+def test_file_keeps_emitting_latest_frames_when_decoding_is_slower_than_playback():
+    clock = Clock()
+    # 프레임 간격(0.1초)보다 디코딩(0.15초)이 느려도 멈추지 않고 최신 프레임을 계속 내보낸다.
+    cap = SeekableCapture(10, fps=10, clock=clock, read_cost_sec=0.15)
+    source = FileVideoSource(
+        "video.mp4", capture_factory=lambda _: cap,
+        monotonic=clock, sleeper=clock.sleep,
+    )
+
+    emitted = list(source.frames())
+
+    assert emitted == [0, 1, 3, 4, 6, 7, 9]
+    assert cap.grabbed == [2, 5, 8]
+    source.close()
+
+
 def test_rtsp_reconnect_limit_and_backoff():
     captures = []
     def factory(_):

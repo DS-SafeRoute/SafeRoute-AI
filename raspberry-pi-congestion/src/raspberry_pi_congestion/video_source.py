@@ -23,7 +23,23 @@ class VideoSource(ABC):
         self.close()
 
 
+# OpenCV VideoCaptureProperties 숫자 값. 테스트 대역에서도 cv2 import 없이 조회한다.
+_CAP_PROP_POS_FRAMES = 1
+_CAP_PROP_FPS = 5
+_CAP_PROP_FRAME_COUNT = 7
+
+
 class FileVideoSource(VideoSource):
+    """녹화 영상을 원본 재생 속도에 맞춰 내보낸다.
+
+    realtime 모드에서 디코딩/추론이 재생 시각보다 뒤처지면, 밀린 프레임은 디코딩
+    결과(BGR 변환)를 만들지 않고 건너뛰거나 탐색해서 항상 가장 최신 프레임부터
+    처리한다. 그래서 처리 속도가 느려도 지연이 누적되지 않는다.
+    """
+
+    # 이만큼 이상 뒤처지면 프레임을 하나씩 grab하는 대신 목표 프레임으로 바로 탐색한다.
+    seek_threshold_sec = 1.0
+
     def __init__(self, path: str, loop: bool = False, realtime: bool = True,
                  fallback_fps: float = 30.0, capture_factory: Optional[Callable] = None,
                  monotonic: Callable[[], float] = time.monotonic,
@@ -50,17 +66,15 @@ class FileVideoSource(VideoSource):
         timeline_offset_ms = 0.0
         frame_index = 0
         while self._cap is not None:
+            if self.realtime:
+                frame_index = self._skip_late_frames(playback_started_at, frame_index)
             ok, frame = self._cap.read()
             if ok:
                 position_ms = timeline_offset_ms + frame_index * self._frame_interval_sec * 1000.0
                 frame_index += 1
                 if self.realtime:
                     due_at = playback_started_at + (position_ms - segment_start_ms) / 1000.0
-                    now = self._monotonic()
-                    if due_at < now - self._frame_interval_sec:
-                        # 디코딩/추론이 원본 영상보다 뒤처졌다면 과거 프레임은 내보내지 않는다.
-                        continue
-                    delay = due_at - now
+                    delay = due_at - self._monotonic()
                     if delay > 0:
                         self._sleep(delay)
                 self.current_position_ms = position_ms
@@ -79,10 +93,37 @@ class FileVideoSource(VideoSource):
             else:
                 return
 
+    def _skip_late_frames(self, playback_started_at: float, frame_index: int) -> int:
+        """현재 재생 시각보다 뒤처진 프레임을 디코딩 결과 없이 건너뛰고 다음에 읽을 위치를 반환한다."""
+        elapsed_sec = self._monotonic() - playback_started_at
+        due_index = math.floor(elapsed_sec / self._frame_interval_sec + 1e-9)
+        late_frames = due_index - frame_index
+        if late_frames <= 0:
+            return frame_index
+        if late_frames * self._frame_interval_sec >= self.seek_threshold_sec and self._seek(due_index):
+            return due_index
+        grab = getattr(self._cap, "grab", None)
+        for _ in range(late_frames):
+            ok = grab() if grab is not None else self._cap.read()[0]
+            if not ok:
+                break
+            frame_index += 1
+        return frame_index
+
+    def _seek(self, frame_index: int) -> bool:
+        try:
+            frame_count = float(self._cap.get(_CAP_PROP_FRAME_COUNT))
+        except (AttributeError, TypeError, ValueError):
+            return False
+        # 끝을 넘는 탐색은 반복 재생 경계 계산을 흐트러뜨리므로 grab으로 처리한다.
+        if not math.isfinite(frame_count) or frame_index >= frame_count:
+            return False
+        set_property = getattr(self._cap, "set", None)
+        return bool(set_property is not None and set_property(_CAP_PROP_POS_FRAMES, frame_index))
+
     def _resolve_frame_interval(self) -> float:
         try:
-            # OpenCV CAP_PROP_FPS의 숫자 값은 5다. 테스트 대역에서도 cv2 import 없이 조회한다.
-            source_fps = float(self._cap.get(5))
+            source_fps = float(self._cap.get(_CAP_PROP_FPS))
         except (AttributeError, TypeError, ValueError):
             source_fps = 0.0
         if not math.isfinite(source_fps) or source_fps <= 0:
