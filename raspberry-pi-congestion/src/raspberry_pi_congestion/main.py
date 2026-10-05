@@ -101,7 +101,8 @@ def main(argv=None) -> int:
                                   config_poll_inactive_sec=config.config_poll_inactive_sec,
                                   preview=preview,
                                   monitoring_jpeg_quality=config.monitoring_jpeg_quality,
-                                  monitoring_image_max_width=config.monitoring_image_max_width)
+                                  monitoring_image_max_width=config.monitoring_image_max_width,
+                                  delivery_monitoring_workers=config.delivery_monitoring_workers)
     if device_client is not None and config.relay_host:
         _start_light_command_executor(config, device_client)
     pipeline.run()

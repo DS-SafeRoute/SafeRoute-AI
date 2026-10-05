@@ -43,6 +43,7 @@ def test_monitoring_image_defaults_reduce_upload_size():
 
     assert config.monitoring_jpeg_quality == 70
     assert config.monitoring_image_max_width == 960
+    assert config.delivery_monitoring_workers == 2
 
 
 @pytest.mark.parametrize("value", ["0", "101", "high"])

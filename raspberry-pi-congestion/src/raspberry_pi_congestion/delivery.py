@@ -38,10 +38,15 @@ class EventDelivery:
 
 
 class DeliveryQueue:
-    """Bounded, event-first network delivery worker.
+    """Bounded network delivery workers split into an event lane and a monitoring lane.
 
-    Frames remain unencoded until the worker handles them. When capacity is
-    exhausted, the oldest monitoring snapshot is discarded before an event.
+    Congestion events and offline replay run on one dedicated worker so their
+    order is preserved and slow monitoring uploads never delay them. Monitoring
+    snapshots run on a small worker pool because the backend tolerates
+    out-of-order observations. Each lane holds at most ``max_items`` jobs; when
+    the monitoring lane is full, its oldest snapshot is discarded. Frames remain
+    unencoded until a worker handles them.
+
     Monitoring snapshots are only for live congestion monitoring, so they are
     downscaled and encoded at a lower JPEG quality to shorten the S3 PUT.
     Congestion event images are evidence and keep the original resolution.
@@ -52,9 +57,12 @@ class DeliveryQueue:
                  max_presigned_refreshes: int = 1,
                  epoch_ms: Callable[[], int] = lambda: int(time.time() * 1000),
                  monitoring_jpeg_quality: int = 70,
-                 monitoring_max_width: int = 960) -> None:
+                 monitoring_max_width: int = 960,
+                 monitoring_workers: int = 2) -> None:
         if max_items <= 0:
             raise ValueError("max_items must be positive")
+        if monitoring_workers <= 0:
+            raise ValueError("monitoring_workers must be positive")
         if shutdown_timeout_sec < 0:
             raise ValueError("shutdown_timeout_sec must not be negative")
         if not 1 <= monitoring_jpeg_quality <= 100:
@@ -76,14 +84,21 @@ class DeliveryQueue:
         self._active_session_id: Optional[str] = None
         self._accepting = True
         self._stop = False
-        self._busy = False
-        self._current_job = None
-        self._current_session_id: Optional[str] = None
+        # 작업 중인 워커 스레드 ident -> 그 작업의 훈련 세션 ID
+        self._inflight: dict[int, Optional[str]] = {}
         self._flush_requested = False
-        self._thread = threading.Thread(
-            target=self._run, name="congestion-delivery", daemon=True
-        )
-        self._thread.start()
+        self._threads = [threading.Thread(
+            target=self._run_events, name="congestion-event-delivery", daemon=True
+        )]
+        self._threads += [
+            threading.Thread(
+                target=self._run_monitoring,
+                name=f"congestion-monitoring-delivery-{index + 1}", daemon=True,
+            )
+            for index in range(monitoring_workers)
+        ]
+        for thread in self._threads:
+            thread.start()
 
     def set_session(self, session_id: Optional[str]) -> int:
         with self._condition:
@@ -94,7 +109,7 @@ class DeliveryQueue:
             self._events.clear()
             self._monitoring.clear()
             self._condition.notify_all()
-            while self._busy and self._current_session_id != session_id:
+            while any(inflight != session_id for inflight in self._inflight.values()):
                 self._condition.wait()
             return discarded
 
@@ -102,15 +117,12 @@ class DeliveryQueue:
         with self._condition:
             if not self._can_accept(job.training_session_id):
                 return False
-            if self._size() >= self.max_items:
-                if self._monitoring:
-                    self._monitoring.popleft()
-                    logger.warning("Dropped oldest monitoring snapshot from full delivery queue")
-                else:
-                    logger.warning("Dropped monitoring snapshot because delivery queue contains only events")
-                    return False
+            if len(self._monitoring) >= self.max_items:
+                self._monitoring.popleft()
+                logger.warning("Dropped oldest monitoring snapshot from full delivery queue")
             self._monitoring.append(job)
-            self._condition.notify()
+            # 두 레인의 워커가 Condition 하나를 공유하므로 다른 레인 워커만 깨우지 않도록 모두 깨운다.
+            self._condition.notify_all()
             return True
 
     def submit_event(self, job: EventDelivery) -> bool:
@@ -118,28 +130,24 @@ class DeliveryQueue:
         with self._condition:
             if not self._can_accept(session_id):
                 return False
-            if self._size() >= self.max_items:
-                if self._monitoring:
-                    self._monitoring.popleft()
-                    logger.warning("Dropped oldest monitoring snapshot to preserve congestion event")
-                else:
-                    logger.error("Delivery queue is saturated with congestion events")
-                    return False
+            if len(self._events) >= self.max_items:
+                logger.error("Delivery queue is saturated with congestion events")
+                return False
             self._events.append(job)
-            self._condition.notify()
+            self._condition.notify_all()
             return True
 
     def request_offline_flush(self) -> None:
         with self._condition:
             self._flush_requested = True
-            self._condition.notify()
+            self._condition.notify_all()
 
     def wait_idle(self, timeout_sec: float = 5.0) -> bool:
         deadline = time.monotonic() + timeout_sec
         with self._condition:
-            while (self._size() or self._busy or self._flush_requested) and time.monotonic() < deadline:
+            while (self._size() or self._inflight or self._flush_requested) and time.monotonic() < deadline:
                 self._condition.wait(max(0.0, deadline - time.monotonic()))
-            return not self._size() and not self._busy
+            return not self._size() and not self._inflight
 
     def close(self) -> None:
         with self._condition:
@@ -156,11 +164,12 @@ class DeliveryQueue:
             self._condition.notify_all()
         for job in pending:
             self._persist_pending(job)
-        self._thread.join(timeout=0.1)
+        for thread in self._threads:
+            thread.join(timeout=0.1)
 
     @property
     def is_alive(self) -> bool:
-        return self._thread.is_alive()
+        return any(thread.is_alive() for thread in self._threads)
 
     @property
     def pending_count(self) -> int:
@@ -174,43 +183,55 @@ class DeliveryQueue:
     def _size(self) -> int:
         return len(self._events) + len(self._monitoring)
 
-    def _run(self) -> None:
+    def _run_events(self) -> None:
+        """순서 보장이 필요한 혼잡 이벤트와 오프라인 재전송을 한 스레드에서 처리한다."""
         while True:
             job = None
             with self._condition:
-                while not self._stop and not self._size() and not self._flush_requested:
+                while not self._stop and not self._events and not self._flush_requested:
                     self._condition.wait()
                 if self._stop:
                     return
                 if self._events:
                     job = self._events.popleft()
-                elif self._flush_requested:
-                    self._flush_requested = False
                 else:
-                    job = self._monitoring.popleft()
-                self._busy = True
-                self._current_job = job
-                self._current_session_id = (
-                    self._job_session(job) if job is not None else self._active_session_id
-                )
-            try:
-                if job is None:
-                    self._flush_offline()
-                elif self._job_session(job) == self._active_session_id:
-                    if isinstance(job, EventDelivery):
-                        self._deliver_event(job)
-                    else:
-                        self._deliver_monitoring(job)
-            except Exception as exc:
-                logger.exception("Background delivery failed: %s", type(exc).__name__)
-                if job is not None:
-                    self._persist_pending(job)
-            finally:
-                with self._condition:
-                    self._busy = False
-                    self._current_job = None
-                    self._current_session_id = None
-                    self._condition.notify_all()
+                    self._flush_requested = False
+                self._begin(job)
+            self._execute(job)
+
+    def _run_monitoring(self) -> None:
+        while True:
+            with self._condition:
+                while not self._stop and not self._monitoring:
+                    self._condition.wait()
+                if self._stop:
+                    return
+                job = self._monitoring.popleft()
+                self._begin(job)
+            self._execute(job)
+
+    def _begin(self, job) -> None:
+        self._inflight[threading.get_ident()] = (
+            self._job_session(job) if job is not None else self._active_session_id
+        )
+
+    def _execute(self, job) -> None:
+        try:
+            if job is None:
+                self._flush_offline()
+            elif self._session_active(self._job_session(job)):
+                if isinstance(job, EventDelivery):
+                    self._deliver_event(job)
+                else:
+                    self._deliver_monitoring(job)
+        except Exception as exc:
+            logger.exception("Background delivery failed: %s", type(exc).__name__)
+            if job is not None:
+                self._persist_pending(job)
+        finally:
+            with self._condition:
+                self._inflight.pop(threading.get_ident(), None)
+                self._condition.notify_all()
 
     def _flush_offline(self) -> None:
         if self.offline_queue is None or not self._active_session_id:

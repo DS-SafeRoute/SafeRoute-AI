@@ -46,6 +46,7 @@ class AppConfig:
     relay_poll_interval_sec: float
     monitoring_jpeg_quality: int
     monitoring_image_max_width: int
+    delivery_monitoring_workers: int
 
     @staticmethod
     def from_env(env: Optional[Mapping[str, str]] = None, mode: Optional[str] = None) -> "AppConfig":
@@ -122,4 +123,5 @@ class AppConfig:
             relay_poll_interval_sec=positive_float("RELAY_POLL_INTERVAL_SEC", "2"),
             monitoring_jpeg_quality=monitoring_jpeg_quality,
             monitoring_image_max_width=positive_int("MONITORING_IMAGE_MAX_WIDTH", "960"),
+            delivery_monitoring_workers=positive_int("DELIVERY_MONITORING_WORKERS", "2"),
         )

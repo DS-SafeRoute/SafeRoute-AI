@@ -119,7 +119,8 @@ def test_realtime_file_pipeline_emits_epoch_aligned_window():
 
     pipeline.run()
 
-    initial, regular = reporter.items
+    # 모니터링 워커가 병렬이라 도착 순서는 보장되지 않는다.
+    initial, regular = sorted(reporter.items, key=lambda item: item.sample_count)
     assert (initial.sample_count, initial.window_start, initial.window_end) == (1, 1_000, 1_000)
     assert regular.sample_count == 20
     assert (regular.window_start, regular.window_end) == (0, 5_000)

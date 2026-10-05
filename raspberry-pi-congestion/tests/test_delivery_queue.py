@@ -61,33 +61,86 @@ def event(event_id):
     )
 
 
-def test_full_queue_drops_oldest_monitoring_and_sends_event_first():
+def test_full_monitoring_lane_drops_oldest_snapshot():
     renderer = BlockingRenderer()
     client = Client()
-    queue = DeliveryQueue(client, renderer, max_items=2)
+    queue = DeliveryQueue(client, renderer, max_items=2, monitoring_workers=1)
     queue.set_session(SESSION)
 
     assert queue.submit_monitoring(monitoring("active"))
     assert renderer.entered.wait(1)
     assert queue.submit_monitoring(monitoring("old"))
     assert queue.submit_monitoring(monitoring("new"))
-    assert queue.submit_event(event("important"))
+    assert queue.submit_monitoring(monitoring("newest"))
     assert queue.pending_count == 2
 
     renderer.release.set()
     assert queue.wait_idle()
     assert client.delivered == [
         ("observation", "active"),
-        ("event", "important"),
         ("observation", "new"),
+        ("observation", "newest"),
     ]
+    queue.close()
+
+
+class EventSignalClient(Client):
+    def __init__(self):
+        super().__init__()
+        self.event_reported = threading.Event()
+
+    def report_event(self, event):
+        reported = super().report_event(event)
+        self.event_reported.set()
+        return reported
+
+
+def test_congestion_event_is_not_delayed_by_blocked_monitoring_uploads():
+    renderer = BlockingRenderer()
+    client = EventSignalClient()
+    queue = DeliveryQueue(client, renderer, max_items=1, monitoring_workers=1)
+    queue.set_session(SESSION)
+
+    assert queue.submit_monitoring(monitoring("blocked"))
+    assert renderer.entered.wait(1)
+    assert queue.submit_monitoring(monitoring("waiting"))
+    # 모니터링 레인이 가득 차 있어도 이벤트는 별도 레인이라 버려지거나 밀리지 않는다.
+    assert queue.submit_event(event("important"))
+
+    assert client.event_reported.wait(1)
+    assert client.delivered == [("event", "important")]
+    renderer.release.set()
+    assert queue.wait_idle()
+    queue.close()
+
+
+class BarrierRenderer:
+    def __init__(self, parties):
+        self.barrier = threading.Barrier(parties, timeout=2)
+
+    def render(self, frame, detections, inside_detections):
+        self.barrier.wait()
+        return frame
+
+
+def test_monitoring_snapshots_are_delivered_by_parallel_workers():
+    client = Client()
+    # 두 작업이 동시에 렌더링 단계에 들어와야만 barrier를 통과한다.
+    queue = DeliveryQueue(client, BarrierRenderer(2), monitoring_workers=2)
+    queue.set_session(SESSION)
+
+    assert queue.submit_monitoring(monitoring("first"))
+    assert queue.submit_monitoring(monitoring("second"))
+
+    assert queue.wait_idle()
+    assert sorted(client.delivered) == [("observation", "first"), ("observation", "second")]
     queue.close()
 
 
 def test_session_change_discards_waiting_and_suppresses_inflight_delivery():
     renderer = BlockingRenderer()
     client = Client()
-    queue = DeliveryQueue(client, renderer, max_items=3)
+    queue = DeliveryQueue(client, renderer, max_items=3, monitoring_workers=1)
     queue.set_session(SESSION)
     queue.submit_monitoring(monitoring("active"))
     assert renderer.entered.wait(1)
@@ -220,7 +273,7 @@ def test_shutdown_timeout_persists_only_jobs_not_owned_by_worker(tmp_path):
     offline = OfflineQueue(str(tmp_path / "offline.db"))
     queue = DeliveryQueue(
         client, BlockingRenderer(), offline_queue=offline,
-        shutdown_timeout_sec=0.01,
+        shutdown_timeout_sec=0.01, monitoring_workers=1,
     )
     # This test blocks in the client, not in the renderer.
     queue.renderer.release.set()
@@ -239,7 +292,8 @@ def test_shutdown_timeout_persists_only_jobs_not_owned_by_worker(tmp_path):
     assert item.payload["observationPayload"]["capturedAt"] == 4_000
     assert item.payload["jpegBase64"]
     client.release_upload.set()
-    queue._thread.join(1)
+    for thread in queue._threads:
+        thread.join(1)
     offline.close()
 
 
