@@ -241,3 +241,46 @@ def test_shutdown_timeout_persists_only_jobs_not_owned_by_worker(tmp_path):
     client.release_upload.set()
     queue._thread.join(1)
     offline.close()
+
+
+class UploadRecordingClient(Client):
+    def __init__(self):
+        super().__init__()
+        self.uploads = {}
+
+    def request_image_upload(self, **kwargs):
+        image_type = kwargs["image_type"]
+        return {"objectKey": image_type, "uploadUrl": image_type, "expiresAt": 2 ** 62}
+
+    def upload_jpeg(self, upload_url, jpeg):
+        self.uploads[upload_url] = jpeg
+        return True
+
+    def attach_event_image(self, event_id, image_key, uploaded_at):
+        return True
+
+
+def test_monitoring_snapshot_is_downscaled_but_event_evidence_keeps_original_resolution():
+    import cv2
+
+    frame = np.random.default_rng(0).integers(0, 256, (480, 1280, 3), dtype=np.uint8)
+    client = UploadRecordingClient()
+    queue = DeliveryQueue(
+        client, PassthroughRenderer(),
+        monitoring_jpeg_quality=50, monitoring_max_width=640,
+    )
+    queue.set_session(SESSION)
+    queue.submit_monitoring(MonitoringDelivery(
+        "monitoring", SESSION, "CCTV_001", 1,
+        WindowSummary(0, 5_000, 4_000, 1, 1.0, 1), Snapshot(frame, (), ()),
+    ))
+    queue.submit_event(EventDelivery(event("evidence").event, Snapshot(frame, (), ())))
+    assert queue.wait_idle()
+
+    monitoring_jpeg = client.uploads["MONITORING"]
+    event_jpeg = client.uploads["CONGESTION_EVENT"]
+    decode = lambda data: cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert decode(monitoring_jpeg).shape == (240, 640, 3)
+    assert decode(event_jpeg).shape == (480, 1280, 3)
+    assert len(monitoring_jpeg) * 4 < len(event_jpeg)
+    queue.close()

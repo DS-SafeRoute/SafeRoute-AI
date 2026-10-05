@@ -42,22 +42,33 @@ class DeliveryQueue:
 
     Frames remain unencoded until the worker handles them. When capacity is
     exhausted, the oldest monitoring snapshot is discarded before an event.
+    Monitoring snapshots are only for live congestion monitoring, so they are
+    downscaled and encoded at a lower JPEG quality to shorten the S3 PUT.
+    Congestion event images are evidence and keep the original resolution.
     """
 
     def __init__(self, client, renderer, offline_queue=None, max_items: int = 32,
                  shutdown_timeout_sec: float = 5.0,
                  max_presigned_refreshes: int = 1,
-                 epoch_ms: Callable[[], int] = lambda: int(time.time() * 1000)) -> None:
+                 epoch_ms: Callable[[], int] = lambda: int(time.time() * 1000),
+                 monitoring_jpeg_quality: int = 70,
+                 monitoring_max_width: int = 960) -> None:
         if max_items <= 0:
             raise ValueError("max_items must be positive")
         if shutdown_timeout_sec < 0:
             raise ValueError("shutdown_timeout_sec must not be negative")
+        if not 1 <= monitoring_jpeg_quality <= 100:
+            raise ValueError("monitoring_jpeg_quality must be between 1 and 100")
+        if monitoring_max_width <= 0:
+            raise ValueError("monitoring_max_width must be positive")
         self.client = client
         self.renderer = renderer
         self.offline_queue = offline_queue
         self.max_items = max_items
         self.shutdown_timeout_sec = shutdown_timeout_sec
         self.max_presigned_refreshes = max_presigned_refreshes
+        self.monitoring_jpeg_quality = monitoring_jpeg_quality
+        self.monitoring_max_width = monitoring_max_width
         self._epoch_ms = epoch_ms
         self._events: deque[EventDelivery] = deque()
         self._monitoring: deque[MonitoringDelivery] = deque()
@@ -262,10 +273,7 @@ class DeliveryQueue:
             break
 
     def _deliver_monitoring(self, job: MonitoringDelivery) -> None:
-        rendered = self.renderer.render(
-            job.snapshot.frame, job.snapshot.detections, job.snapshot.inside_detections
-        )
-        jpeg = self._encode(rendered)
+        jpeg = self._encode_monitoring(job.snapshot)
         image_key = self._upload(
             jpeg, job.training_session_id, job.cctv_code, "MONITORING",
             job.event_id, job.summary.captured_at_ms,
@@ -357,10 +365,7 @@ class DeliveryQueue:
                 job.event_id, job.training_session_id, job.cctv_code,
                 job.config_version, job.summary,
             )
-            rendered = self.renderer.render(
-                job.snapshot.frame, job.snapshot.detections, job.snapshot.inside_detections
-            )
-            jpeg = self._encode(rendered)
+            jpeg = self._encode_monitoring(job.snapshot)
             payload = {"observationPayload": observation.to_json()}
             operation = "pending_observation"
             event_id = job.event_id
@@ -387,10 +392,25 @@ class DeliveryQueue:
         return (job.event.training_session_id if isinstance(job, EventDelivery)
                 else job.training_session_id)
 
-    @staticmethod
-    def _encode(frame) -> Optional[bytes]:
+    def _encode_monitoring(self, snapshot: Snapshot) -> Optional[bytes]:
         import cv2
-        ok, encoded = cv2.imencode(".jpg", frame)
+
+        rendered = self.renderer.render(
+            snapshot.frame, snapshot.detections, snapshot.inside_detections
+        )
+        height, width = rendered.shape[:2]
+        if width > self.monitoring_max_width:
+            scaled_height = max(1, round(height * self.monitoring_max_width / width))
+            rendered = cv2.resize(
+                rendered, (self.monitoring_max_width, scaled_height), interpolation=cv2.INTER_AREA
+            )
+        return self._encode(rendered, self.monitoring_jpeg_quality)
+
+    @staticmethod
+    def _encode(frame, quality: Optional[int] = None) -> Optional[bytes]:
+        import cv2
+        params = [] if quality is None else [cv2.IMWRITE_JPEG_QUALITY, quality]
+        ok, encoded = cv2.imencode(".jpg", frame, params)
         return encoded.tobytes() if ok else None
 
     @staticmethod

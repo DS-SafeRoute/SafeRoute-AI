@@ -32,6 +32,32 @@ def test_inactive_poll_interval_defaults_to_one_second_for_fast_training_start()
     assert config.config_poll_inactive_sec == 1
 
 
+def test_monitoring_image_defaults_reduce_upload_size():
+    config = AppConfig.from_env(
+        {
+            "RUN_MODE": "dry-run",
+            "VIDEO_SOURCE": "./sample_videos/test.mp4",
+            "CCTV_CODE": "CCTV_001",
+        }
+    )
+
+    assert config.monitoring_jpeg_quality == 70
+    assert config.monitoring_image_max_width == 960
+
+
+@pytest.mark.parametrize("value", ["0", "101", "high"])
+def test_monitoring_jpeg_quality_must_be_between_1_and_100(value):
+    env = {
+        "RUN_MODE": "dry-run",
+        "VIDEO_SOURCE": "./sample_videos/test.mp4",
+        "CCTV_CODE": "CCTV_001",
+        "MONITORING_JPEG_QUALITY": value,
+    }
+
+    with pytest.raises(ConfigError, match="MONITORING_JPEG_QUALITY"):
+        AppConfig.from_env(env)
+
+
 def test_show_preview_can_be_enabled_from_env():
     config = AppConfig.from_env(
         {

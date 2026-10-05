@@ -33,7 +33,9 @@ class CongestionPipeline:
                  max_presigned_refreshes: int = 1,
                  delivery_queue_max_items: int = 32,
                  shutdown_drain_timeout_sec: float = 5.0,
-                 delivery_queue=None) -> None:
+                 delivery_queue=None,
+                 monitoring_jpeg_quality: int = 70,
+                 monitoring_image_max_width: int = 960) -> None:
         if max_presigned_refreshes < 0:
             raise ValueError("max_presigned_refreshes must not be negative")
         self.video_source = video_source
@@ -72,6 +74,8 @@ class CongestionPipeline:
             shutdown_timeout_sec=shutdown_drain_timeout_sec,
             max_presigned_refreshes=max_presigned_refreshes,
             epoch_ms=epoch_ms,
+            monitoring_jpeg_quality=monitoring_jpeg_quality,
+            monitoring_max_width=monitoring_image_max_width,
         )
         self._config = None if config_provider else DeviceCongestionConfig(
             True, "local-dry-run", cctv_code, 1, 1.0, aggregator.window_sec,

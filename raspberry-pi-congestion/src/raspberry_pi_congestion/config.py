@@ -44,6 +44,8 @@ class AppConfig:
     relay_host: Optional[str]
     relay_port: Optional[int]
     relay_poll_interval_sec: float
+    monitoring_jpeg_quality: int
+    monitoring_image_max_width: int
 
     @staticmethod
     def from_env(env: Optional[Mapping[str, str]] = None, mode: Optional[str] = None) -> "AppConfig":
@@ -68,7 +70,19 @@ class AppConfig:
         cctv_code = required("CCTV_CODE")
         config_poll_active_sec = positive_float("CONFIG_POLL_ACTIVE_SEC", "5")
         config_poll_inactive_sec = positive_float("CONFIG_POLL_INACTIVE_SEC", "1")
+        def positive_int(key: str, default: str) -> int:
+            try:
+                value = int(e.get(key, default))
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(f"{key} must be a positive integer") from exc
+            if value <= 0:
+                raise ConfigError(f"{key} must be a positive integer")
+            return value
         file_fallback_fps = positive_float("FILE_FALLBACK_FPS", "30")
+        # 모니터링 스냅샷은 실시간 화면용이라 화질을 낮춰 업로드 시간을 줄인다. 혼잡 이벤트 이미지는 원본 유지.
+        monitoring_jpeg_quality = positive_int("MONITORING_JPEG_QUALITY", "70")
+        if monitoring_jpeg_quality > 100:
+            raise ConfigError("MONITORING_JPEG_QUALITY must be between 1 and 100")
         if cctv_code not in {"CCTV_001", "CCTV_002"} and selected_mode not in {"dry-run", "test", "setup-roi"}:
             raise ConfigError("CCTV_CODE must be CCTV_001 or CCTV_002")
         if selected_mode in {"file", "rtsp"} and not server:
@@ -106,4 +120,6 @@ class AppConfig:
             log_level=e.get("LOG_LEVEL", "INFO"),
             relay_host=relay_host, relay_port=relay_port,
             relay_poll_interval_sec=positive_float("RELAY_POLL_INTERVAL_SEC", "2"),
+            monitoring_jpeg_quality=monitoring_jpeg_quality,
+            monitoring_image_max_width=positive_int("MONITORING_IMAGE_MAX_WIDTH", "960"),
         )
