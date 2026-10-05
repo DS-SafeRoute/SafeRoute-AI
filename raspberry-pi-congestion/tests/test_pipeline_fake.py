@@ -119,10 +119,11 @@ def test_realtime_file_pipeline_emits_epoch_aligned_window():
 
     pipeline.run()
 
-    assert len(reporter.items) == 1
-    assert reporter.items[0].sample_count == 20
-    assert (reporter.items[0].window_start, reporter.items[0].window_end) == (0, 5_000)
-    assert reporter.items[0].captured_at == 4_800
+    initial, regular = reporter.items
+    assert (initial.sample_count, initial.window_start, initial.window_end) == (1, 1_000, 1_000)
+    assert regular.sample_count == 20
+    assert (regular.window_start, regular.window_end) == (0, 5_000)
+    assert regular.captured_at == 4_800
     assert capture.released
 
 

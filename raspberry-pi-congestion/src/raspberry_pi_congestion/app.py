@@ -11,7 +11,7 @@ from .event_detector import CongestionEventDetector
 from .image_renderer import OpenCvDetectionRenderer
 from .models import (
     CongestionEvent, CongestionObservation, CongestionThresholds,
-    DeviceCongestionConfig, EventDetectionSettings,
+    DeviceCongestionConfig, EventDetectionSettings, WindowSummary,
 )
 from .offline_queue import OfflineQueue
 from .roi_counter import RoiCounter
@@ -65,6 +65,7 @@ class CongestionPipeline:
         self._event_detector = CongestionEventDetector()
         self._monitoring_snapshot: Optional[Snapshot] = None
         self._delivery_session_id: Optional[str] = None
+        self._initial_snapshot_pending = False
         self.delivery_queue = delivery_queue or DeliveryQueue(
             reporter, self.image_renderer, offline_queue,
             max_items=delivery_queue_max_items,
@@ -116,6 +117,13 @@ class CongestionPipeline:
             self._preview_stop_requested = not self.preview.show(frame, detections, inside_detections)
         snapshot = Snapshot(frame.copy(), tuple(detections), tuple(inside_detections))
         self._process_local_event(snapshot, count, captured_at_ms, config)
+        if self._initial_snapshot_pending:
+            # 훈련 활성화 직후 첫 화면은 집계 구간이 끝날 때까지 기다리지 않고 단일 샘플로 바로 보낸다.
+            # 이 샘플은 아래 정기 집계에도 그대로 포함된다.
+            self._initial_snapshot_pending = False
+            self._submit_monitoring(config, WindowSummary(
+                captured_at_ms, captured_at_ms, captured_at_ms, 1, float(count), count,
+            ), snapshot)
         summary = self.aggregator.add_sample(count, captured_at_ms)
         if summary is None:
             self._monitoring_snapshot = snapshot
@@ -125,6 +133,10 @@ class CongestionPipeline:
         if monitoring_snapshot is None:
             logger.error("Completed observation window has no monitoring frame")
             return None
+        return self._submit_monitoring(config, summary, monitoring_snapshot)
+
+    def _submit_monitoring(self, config: DeviceCongestionConfig, summary: WindowSummary,
+                           snapshot: Snapshot) -> CongestionObservation:
         event_id = str(uuid.uuid4())
         observation = CongestionObservation.from_summary(
             event_id, config.training_session_id, self.cctv_code,
@@ -132,7 +144,7 @@ class CongestionPipeline:
         )
         self.delivery_queue.submit_monitoring(MonitoringDelivery(
             event_id, config.training_session_id, self.cctv_code,
-            config.config_version, summary, monitoring_snapshot,
+            config.config_version, summary, snapshot,
         ))
         return observation
 
@@ -174,7 +186,12 @@ class CongestionPipeline:
     def _ensure_delivery_session(self, session_id: str) -> None:
         if session_id == self._delivery_session_id:
             return
+        self._switch_delivery_session(session_id)
+
+    def _switch_delivery_session(self, session_id: Optional[str]) -> None:
         discarded = self.delivery_queue.set_session(session_id)
+        if session_id != self._delivery_session_id:
+            self._initial_snapshot_pending = session_id is not None
         self._delivery_session_id = session_id
         if discarded:
             logger.info("Discarded %d pending deliveries from an inactive training session", discarded)
@@ -237,10 +254,7 @@ class CongestionPipeline:
         if session_changed or not new_config.training_active:
             self._event_detector.reset()
             session_id = new_config.training_session_id if new_config.training_active else None
-            discarded = self.delivery_queue.set_session(session_id)
-            self._delivery_session_id = session_id
-            if discarded:
-                logger.info("Discarded %d pending deliveries from an inactive training session", discarded)
+            self._switch_delivery_session(session_id)
         if self.offline_queue is not None:
             if not new_config.training_active or not new_config.training_session_id:
                 discarded = self.offline_queue.clear()

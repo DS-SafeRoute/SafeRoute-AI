@@ -130,3 +130,48 @@ def test_new_training_session_discards_other_session_queue(tmp_path):
 
     assert [item.event_id for item in queue.peek_oldest()] == ["current"]
     pipeline.close()
+
+
+class TogglingProvider(ActiveProvider):
+    def __init__(self):
+        self.active = True
+
+    def fetch_config(self, code):
+        if self.active:
+            return super().fetch_config(code)
+        return InactiveProvider().fetch_config(code)
+
+
+class RecordingReporter(LoggingCongestionReporter):
+    def __init__(self):
+        self.items = []
+
+    def report(self, observation):
+        self.items.append(observation)
+        return True
+
+
+def test_each_training_activation_sends_initial_snapshot_immediately():
+    provider, reporter = TogglingProvider(), RecordingReporter()
+    pipeline = CongestionPipeline(
+        Source(), Detector(),
+        RoiCounter([Point(0, 0), Point(1, 0), Point(1, 1), Point(0, 1)]),
+        WindowAggregator(), reporter, "CCTV_001", config_provider=provider,
+    )
+    frame = np.zeros((10, 10, 3), dtype=np.uint8)
+
+    pipeline._maybe_refresh_config(0)
+    pipeline.process_frame(frame, 1_000)
+    pipeline.process_frame(frame, 2_000)
+    assert pipeline.delivery_queue.wait_idle()
+    provider.active = False
+    pipeline._maybe_refresh_config(10)
+    provider.active = True
+    pipeline._maybe_refresh_config(20)
+    pipeline.process_frame(frame, 3_000)
+    assert pipeline.delivery_queue.wait_idle()
+
+    assert [(item.window_start, item.window_end) for item in reporter.items] == [
+        (1_000, 1_000), (3_000, 3_000),
+    ]
+    pipeline.close()
