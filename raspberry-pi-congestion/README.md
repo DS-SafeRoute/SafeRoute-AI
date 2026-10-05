@@ -5,13 +5,17 @@ Raspberry Pi가 CCTV 영상의 ROI 안 사람 수를 5 FPS로 추론하고, Spri
 ## 현재 연동 계약
 
 - 장치 코드는 데모 기준 `CCTV_001` 또는 `CCTV_002`이고, 각 장치의 전용 Bearer Token은 `DEVICE_AUTH_TOKEN`으로만 주입한다.
-- `GET /api/v1/device/congestion-config?cctvCode=...`를 훈련 중 5초, 비활성 중 15초 간격으로 조회한다.
+- `GET /api/v1/device/congestion-config?cctvCode=...`를 훈련 중 5초, 비활성 중 1초 간격으로 조회한다. 비활성 간격을 짧게 둬서 훈련 시작을 빨리 알아챈다.
 - `trainingSessionId`는 BE가 준 UUID를 그대로 사용한다. Pi가 세션 ID를 생성하지 않는다.
 - `trainingActive=false`이면 추론, 관측값, 이벤트, 이미지 인코딩·업로드, Presigned URL 요청을 중단한다.
 - `configVersion` 또는 세션/활성 상태가 바뀌면 집계 창, 추론 FPS, 임계값과 이벤트 설정을 즉시 적용한다.
 - 밀도는 `headcount / monitoredAreaM2`로 계산하고 단계 임계값은 BE 응답만 사용한다.
 - 혼잡 진입/상승은 기본 3프레임, 정상 복귀는 5프레임 연속 조건이며 단계 상승은 cooldown과 무관하게 즉시 보낸다.
 - 모든 시간 필드는 Unix timestamp 밀리초다.
+- 훈련이 활성화된 직후 첫 프레임은 집계 구간을 기다리지 않고 초기 스냅샷으로 바로 보낸다. 초기 스냅샷은 `windowStart = windowEnd = capturedAt`, `sampleCount = 1`인 관측값이며, 이후에는 정기 집계 관측값이 이어진다.
+- 혼잡 이벤트는 전용 단일 워커가 순서대로 보내고, 모니터링 스냅샷은 별도 워커 풀(`DELIVERY_MONITORING_WORKERS`, 기본 2)이 병렬로 보낸다. 모니터링 관측값은 도착 순서가 바뀔 수 있고, BE가 `capturedAt` 기준으로 최신 상태만 반영한다.
+- 모니터링 스냅샷 JPEG는 최대 폭 `MONITORING_IMAGE_MAX_WIDTH`(기본 960px), 품질 `MONITORING_JPEG_QUALITY`(기본 70)로 줄여서 업로드한다. 혼잡 이벤트 이미지는 증거용이라 원본 해상도를 유지한다.
+- 녹화 영상(`FILE_REALTIME=true`) 처리가 재생 속도보다 밀리면 오래된 프레임은 디코딩하지 않고 건너뛰어 최신 프레임부터 처리한다.
 
 5초 관측값의 `avgHeadcount`는 정확도를 위해 실수로 보낸다. `peakHeadcount`와 `sampleCount`는 정수다. 이미지 업로드가 실패해도 `monitoringImageKey: null`로 관측값은 전송한다.
 
