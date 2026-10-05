@@ -124,6 +124,7 @@ def test_first_frame_after_training_starts_is_sent_without_waiting_for_window():
     initial = client.observations[0]
     assert (initial.window_start, initial.window_end, initial.captured_at) == (1_000, 1_000, 1_000)
     assert (initial.sample_count, initial.avg_headcount, initial.peak_headcount) == (1, 1, 1)
+    assert initial.frame_headcount == 1
     assert initial.monitoring_image_key == "monitoring/initial.jpg"
     assert client.presigned_requests[0]["captured_at"] == 1_000
     # 같은 세션 안에서는 초기 스냅샷을 다시 보내지 않고 정기 집계만 이어진다.
