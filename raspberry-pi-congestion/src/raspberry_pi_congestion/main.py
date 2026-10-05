@@ -21,12 +21,14 @@ logger = logging.getLogger(__name__)
 
 
 def _setup_roi(config: AppConfig) -> None:
+    path = config.roi_config_path or f"./config/roi/{config.cctv_code}.json"
     source = FileVideoSource(config.video_source)
     try:
         frame = next(source.frames())
-        JsonRoiProvider(config.roi_config_path).save(InteractiveRoiSelector().select(frame))
+        JsonRoiProvider(path).save(InteractiveRoiSelector().select(frame))
     finally:
         source.close()
+    print(f"ROI saved to {path}. Set ROI_CONFIG_PATH={path} to count only inside this ROI.")
 
 
 def _start_light_command_executor(config: AppConfig, device_client: SafeRouteDeviceClient) -> None:
@@ -67,7 +69,10 @@ def main(argv=None) -> int:
     except ConfigError as exc:
         print(f"[FATAL] {exc}", file=sys.stderr)
         return 2
-    logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=getattr(logging, config.log_level.upper(), logging.INFO),
+        format=f"%(asctime)s %(levelname)s [{config.cctv_code}] %(name)s: %(message)s",
+    )
     if config.mode == "setup-roi":
         _setup_roi(config)
         return 0
@@ -91,15 +96,20 @@ def main(argv=None) -> int:
     else:
         detector = create_detector(config)
     queue = None if config.mode in {"dry-run", "test"} else OfflineQueue(config.offline_queue_db_path, config.offline_queue_max_age_sec, config.offline_queue_max_items)
-    roi = JsonRoiProvider(config.roi_config_path).load()
-    preview = OpenCvPreview(roi) if config.show_preview else None
+    roi = JsonRoiProvider(config.roi_config_path).load() if config.roi_config_path else None
+    if roi is None:
+        logger.info("ROI_CONFIG_PATH가 없어 화면 전체의 사람을 집계합니다")
+    preview = OpenCvPreview(roi or ()) if config.show_preview else None
     pipeline = CongestionPipeline(source, detector, RoiCounter(roi),
                                   WindowAggregator(config.window_sec), reporter, config.cctv_code, queue,
                                   config.target_inference_fps, config.offline_flush_interval_sec,
                                   config_provider=device_client,
                                   config_poll_active_sec=config.config_poll_active_sec,
                                   config_poll_inactive_sec=config.config_poll_inactive_sec,
-                                  preview=preview)
+                                  preview=preview,
+                                  monitoring_jpeg_quality=config.monitoring_jpeg_quality,
+                                  monitoring_image_max_width=config.monitoring_image_max_width,
+                                  delivery_monitoring_workers=config.delivery_monitoring_workers)
     if device_client is not None and config.relay_host:
         _start_light_command_executor(config, device_client)
     pipeline.run()

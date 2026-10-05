@@ -1,17 +1,23 @@
 # SafeRoute Raspberry Pi congestion observer
 
-Raspberry Pi가 CCTV 영상의 ROI 안 사람 수를 5 FPS로 추론하고, Spring BE 설정에 따라 관측값·혼잡 이벤트·JPEG 이미지를 전송한다. Pi는 `GridCell`, `MapEdge`, 경로 계산, 관리자 승인 처리를 하지 않는다.
+Raspberry Pi가 CCTV 영상의 사람 수(기본은 화면 전체, ROI를 설정하면 ROI 안)를 5 FPS로 추론하고, Spring BE 설정에 따라 관측값·혼잡 이벤트·JPEG 이미지를 전송한다. Pi는 `GridCell`, `MapEdge`, 경로 계산, 관리자 승인 처리를 하지 않는다.
 
 ## 현재 연동 계약
 
-- 장치 코드는 데모 기준 `CCTV_001` 또는 `CCTV_002`이고, 각 장치의 전용 Bearer Token은 `DEVICE_AUTH_TOKEN`으로만 주입한다.
-- `GET /api/v1/device/congestion-config?cctvCode=...`를 훈련 중 5초, 비활성 중 15초 간격으로 조회한다.
+- 장치 코드(`CCTV_CODE`)는 BE에 등록된 CCTV 코드를 그대로 쓰고(예: `CCTV_122`), 각 장치의 전용 Bearer Token은 `DEVICE_AUTH_TOKEN`으로만 주입한다. 코드와 토큰의 일치 여부는 BE가 검증한다.
+- `GET /api/v1/device/congestion-config?cctvCode=...`를 훈련 중 5초, 비활성 중 1초 간격으로 조회한다. 비활성 간격을 짧게 둬서 훈련 시작을 빨리 알아챈다.
 - `trainingSessionId`는 BE가 준 UUID를 그대로 사용한다. Pi가 세션 ID를 생성하지 않는다.
 - `trainingActive=false`이면 추론, 관측값, 이벤트, 이미지 인코딩·업로드, Presigned URL 요청을 중단한다.
+- 녹화 영상 입력은 `trainingActive=true`가 될 때까지 재생을 멈춰 두고, 훈련이 시작되면 멈춘 위치(처음이면 첫 프레임)부터 재생한다.
 - `configVersion` 또는 세션/활성 상태가 바뀌면 집계 창, 추론 FPS, 임계값과 이벤트 설정을 즉시 적용한다.
 - 밀도는 `headcount / monitoredAreaM2`로 계산하고 단계 임계값은 BE 응답만 사용한다.
+- 모니터링 이미지와 같은 Snapshot의 집계 인원은 `frameHeadcount`로 보내며, 이미지 오버레이의 `headcount`와 항상 일치한다.
 - 혼잡 진입/상승은 기본 3프레임, 정상 복귀는 5프레임 연속 조건이며 단계 상승은 cooldown과 무관하게 즉시 보낸다.
 - 모든 시간 필드는 Unix timestamp 밀리초다.
+- 훈련이 활성화된 직후 첫 프레임은 집계 구간을 기다리지 않고 초기 스냅샷으로 바로 보낸다. 초기 스냅샷은 `windowStart = windowEnd = capturedAt`, `sampleCount = 1`인 관측값이며, 이후에는 정기 집계 관측값이 이어진다.
+- 혼잡 이벤트는 전용 단일 워커가 순서대로 보내고, 모니터링 스냅샷은 별도 워커 풀(`DELIVERY_MONITORING_WORKERS`, 기본 2)이 병렬로 보낸다. 모니터링 관측값은 도착 순서가 바뀔 수 있고, BE가 `capturedAt` 기준으로 최신 상태만 반영한다.
+- 모니터링 스냅샷 JPEG는 최대 폭 `MONITORING_IMAGE_MAX_WIDTH`(기본 960px), 품질 `MONITORING_JPEG_QUALITY`(기본 70)로 줄여서 업로드한다. 혼잡 이벤트 이미지는 증거용이라 원본 해상도를 유지한다.
+- 녹화 영상(`FILE_REALTIME=true`) 처리가 재생 속도보다 밀리면 오래된 프레임은 디코딩하지 않고 건너뛰어 최신 프레임부터 처리한다.
 
 5초 관측값의 `avgHeadcount`는 정확도를 위해 실수로 보낸다. `peakHeadcount`와 `sampleCount`는 정수다. 이미지 업로드가 실패해도 `monitoringImageKey: null`로 관측값은 전송한다.
 
@@ -22,6 +28,7 @@ Raspberry Pi가 CCTV 영상의 ROI 안 사람 수를 5 FPS로 추론하고, Spri
   "cctvCode": "CCTV_001",
   "avgHeadcount": 4.75,
   "peakHeadcount": 8,
+  "frameHeadcount": 7,
   "sampleCount": 25,
   "windowStart": 1786500000000,
   "windowEnd": 1786500005000,
@@ -30,6 +37,11 @@ Raspberry Pi가 CCTV 영상의 ROI 안 사람 수를 5 FPS로 추론하고, Spri
   "configVersion": 1
 }
 ```
+
+`avgHeadcount`와 `peakHeadcount`는 5초 관측 구간의 평균과 최대값이고,
+`frameHeadcount`는 `monitoringImageKey`가 가리키는 단일 이미지의 인원수다.
+BE는 상세 모니터링 프레임의 인원수와 밀집도를 `frameHeadcount` 기준으로 제공하고,
+현재 혼잡 상태와 경로 계산에는 기존 구간 평균을 계속 사용할 수 있다.
 
 혼잡 이벤트에는 `edgeId`와 `eventImageKey`를 넣지 않는다. 이벤트 POST와 이미지 업로드를 병렬 처리한 뒤, 둘 다 성공하면 `PATCH /api/v1/device/congestion-events/{eventId}/image`로 BE가 발급한 `objectKey`를 연결한다.
 
@@ -54,6 +66,44 @@ python -m raspberry_pi_congestion.main file
 # 또는
 python -m raspberry_pi_congestion.main rtsp
 ```
+
+### 여러 CCTV 동시 실행
+
+공용 `.env`에는 `SAFEROUTE_SERVER_BASE_URL`, 모델 설정처럼 모든 CCTV가 공유하는
+값을 둔다. `device-configs/CCTV.env.example`을 복사해 CCTV마다 별도 프로필을 만든다.
+
+```text
+device-configs/
+  CCTV_001.env
+  CCTV_002.env
+```
+
+각 프로필에는 장치별 값을 넣는다. DB에 저장된 해시가 아니라 CCTV 등록 시 발급된
+원본 토큰을 사용해야 한다.
+
+```dotenv
+CCTV_CODE=CCTV_001
+DEVICE_AUTH_TOKEN={CCTV_001 원본 토큰}
+VIDEO_SOURCE={CCTV_001_VIDEO_FILE}
+```
+
+아래 명령 하나로 `device-configs/*.env`의 CCTV를 각각 독립 프로세스로 실행한다.
+
+```powershell
+python -m raspberry_pi_congestion.multi_main file
+```
+
+특정 프로필만 실행하려면 `--device-env`를 반복 지정한다.
+
+```powershell
+python -m raspberry_pi_congestion.multi_main file `
+  --device-env device-configs/CCTV_001.env `
+  --device-env device-configs/CCTV_002.env
+```
+
+로그에는 `[CCTV_001]`처럼 장치 코드가 표시된다. `OFFLINE_QUEUE_DB_PATH`를
+생략하면 CCTV별 SQLite 파일을 자동으로 사용하고, 같은 큐 경로를 중복 지정하면
+실행 전에 오류로 막는다. `Ctrl+C`를 누르면 실행 중인 CCTV 프로세스를 모두 종료한다.
 
 ## Hailo NPU 실행
 
@@ -104,7 +154,6 @@ python -c "import hailo_platform; print('hailo_platform import 성공')"
 RUN_MODE=dry-run
 CCTV_CODE=CCTV_001
 VIDEO_SOURCE=rtsp://{USER}:{PASSWORD}@{CCTV_IP}:554/{STREAM_PATH}
-ROI_CONFIG_PATH=./config/roi/CCTV_001.json
 DETECTOR_BACKEND=hailo
 MODEL_PATH=/실제/모델/경로/model.hef
 DETECTOR_CONF_THRESHOLD=0.4
@@ -120,12 +169,14 @@ python -m raspberry_pi_congestion.main dry-run
 `CCTV_001`, `CCTV_002`를 각각 검증한 뒤 `RUN_MODE=rtsp`로 백엔드 통합
 테스트를 수행한다. RTSP URL, 카메라 비밀번호, 장치 토큰은 커밋하지 않는다.
 
-개발 PC에서 추론 화면을 확인하려면 `SHOW_PREVIEW=true`를 설정한다. 노란색은 ROI,
-초록색 박스는 ROI 안에서 집계된 사람, 주황색 박스는 ROI 밖 사람이다. 창에서 `Q` 또는
-`Esc`를 누르면 파이프라인과 미리보기 창이 함께 종료된다. 기본값은 `false`이며 전송용
-JPEG에는 오버레이가 포함되지 않는다.
+개발 PC에서 추론 화면을 확인하려면 `SHOW_PREVIEW=true`를 설정한다. 초록색 박스는 집계된
+사람이다. ROI를 설정한 경우 노란색 선이 ROI, 주황색 박스가 ROI 밖 사람이다. 창에서 `Q` 또는
+`Esc`를 누르면 파이프라인과 미리보기 창이 함께 종료된다. 기본값은 `false`이다.
+전송용 모니터링·이벤트 JPEG에도 같은 박스와 인원수가 표시된다.
 
-ROI는 CCTV별 파일로 저장한다. `ROI_CONFIG_PATH`를 생략하면 `./config/roi/CCTV_001.json`처럼 장치 코드 기반 경로를 사용한다.
+기본값은 ROI 없이 화면 전체의 사람을 집계한다. 특정 영역만 집계하려면 `setup-roi`로 ROI를
+CCTV별 파일로 저장한 뒤 `ROI_CONFIG_PATH`에 그 경로를 지정한다. `setup-roi`는
+`ROI_CONFIG_PATH`가 없으면 `./config/roi/{CCTV_CODE}.json`에 저장한다.
 
 ```powershell
 python -m raspberry_pi_congestion.main setup-roi

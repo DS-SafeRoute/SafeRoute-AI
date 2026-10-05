@@ -119,10 +119,12 @@ def test_realtime_file_pipeline_emits_epoch_aligned_window():
 
     pipeline.run()
 
-    assert len(reporter.items) == 1
-    assert reporter.items[0].sample_count == 20
-    assert (reporter.items[0].window_start, reporter.items[0].window_end) == (0, 5_000)
-    assert reporter.items[0].captured_at == 4_800
+    # 모니터링 워커가 병렬이라 도착 순서는 보장되지 않는다.
+    initial, regular = sorted(reporter.items, key=lambda item: item.sample_count)
+    assert (initial.sample_count, initial.window_start, initial.window_end) == (1, 1_000, 1_000)
+    assert regular.sample_count == 20
+    assert (regular.window_start, regular.window_end) == (0, 5_000)
+    assert regular.captured_at == 4_800
     assert capture.released
 
 
@@ -147,6 +149,7 @@ def test_zero_detection_frames_are_reported_as_zero_headcount():
 
     assert observation.avg_headcount == 0
     assert observation.peak_headcount == 0
+    assert observation.frame_headcount == 0
     assert observation.sample_count == 2
 
 
