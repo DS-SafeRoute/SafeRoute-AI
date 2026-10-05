@@ -19,6 +19,19 @@ def test_default_paths_follow_project_directory_structure():
     assert not config.show_preview
 
 
+def test_inactive_poll_interval_defaults_to_one_second_for_fast_training_start():
+    config = AppConfig.from_env(
+        {
+            "RUN_MODE": "dry-run",
+            "VIDEO_SOURCE": "./sample_videos/test.mp4",
+            "CCTV_CODE": "CCTV_001",
+        }
+    )
+
+    assert config.config_poll_active_sec == 5
+    assert config.config_poll_inactive_sec == 1
+
+
 def test_show_preview_can_be_enabled_from_env():
     config = AppConfig.from_env(
         {

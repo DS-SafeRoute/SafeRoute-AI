@@ -67,7 +67,7 @@ class AppConfig:
         server = e.get("SAFEROUTE_SERVER_BASE_URL")
         cctv_code = required("CCTV_CODE")
         config_poll_active_sec = positive_float("CONFIG_POLL_ACTIVE_SEC", "5")
-        config_poll_inactive_sec = positive_float("CONFIG_POLL_INACTIVE_SEC", "15")
+        config_poll_inactive_sec = positive_float("CONFIG_POLL_INACTIVE_SEC", "1")
         file_fallback_fps = positive_float("FILE_FALLBACK_FPS", "30")
         if cctv_code not in {"CCTV_001", "CCTV_002"} and selected_mode not in {"dry-run", "test", "setup-roi"}:
             raise ConfigError("CCTV_CODE must be CCTV_001 or CCTV_002")

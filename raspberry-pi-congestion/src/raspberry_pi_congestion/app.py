@@ -28,7 +28,7 @@ class CongestionPipeline:
                  monotonic: Callable[[], float] = time.monotonic,
                  epoch_ms: Callable[[], int] = lambda: int(time.time() * 1000),
                  config_provider=None, config_poll_active_sec: float = 5.0,
-                 config_poll_inactive_sec: float = 15.0,
+                 config_poll_inactive_sec: float = 1.0,
                  preview=None, image_renderer=None,
                  max_presigned_refreshes: int = 1,
                  delivery_queue_max_items: int = 32,
