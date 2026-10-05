@@ -14,7 +14,7 @@ class ConfigError(RuntimeError):
 class AppConfig:
     mode: str
     video_source: str
-    roi_config_path: str
+    roi_config_path: Optional[str]
     cctv_code: str
     detector_backend: str
     model_path: Optional[str]
@@ -101,7 +101,8 @@ class AppConfig:
             raise ConfigError("RELAY_PORT must be an integer") from exc
         return AppConfig(
             mode=selected_mode, video_source=required("VIDEO_SOURCE"),
-            roi_config_path=e.get("ROI_CONFIG_PATH", f"./config/roi/{cctv_code}.json"), cctv_code=cctv_code,
+            # ROI_CONFIG_PATH가 없으면 ROI 없이 화면 전체의 사람을 집계한다.
+            roi_config_path=e.get("ROI_CONFIG_PATH") or None, cctv_code=cctv_code,
             detector_backend=e.get("DETECTOR_BACKEND", "ultralytics"), model_path=e.get("MODEL_PATH"),
             detector_conf_threshold=float(e.get("DETECTOR_CONF_THRESHOLD", "0.4")),
             target_inference_fps=float(e.get("TARGET_INFERENCE_FPS", "5")), window_sec=float(e.get("WINDOW_SEC", "5")),

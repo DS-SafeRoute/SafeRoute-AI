@@ -9,7 +9,7 @@ from .models import Detection, Point
 class OpenCvPreview:
     """개발 PC에서만 사용하는 추론 미리보기 창."""
 
-    def __init__(self, roi: Sequence[Point], window_name: str = "SafeRoute Congestion Preview") -> None:
+    def __init__(self, roi: Sequence[Point] = (), window_name: str = "SafeRoute Congestion Preview") -> None:
         self.renderer = OpenCvDetectionRenderer(roi)
         self.window_name = window_name
         self._cv2 = None

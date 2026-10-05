@@ -1,6 +1,6 @@
 # SafeRoute Raspberry Pi congestion observer
 
-Raspberry Pi가 CCTV 영상의 ROI 안 사람 수를 5 FPS로 추론하고, Spring BE 설정에 따라 관측값·혼잡 이벤트·JPEG 이미지를 전송한다. Pi는 `GridCell`, `MapEdge`, 경로 계산, 관리자 승인 처리를 하지 않는다.
+Raspberry Pi가 CCTV 영상의 사람 수(기본은 화면 전체, ROI를 설정하면 ROI 안)를 5 FPS로 추론하고, Spring BE 설정에 따라 관측값·혼잡 이벤트·JPEG 이미지를 전송한다. Pi는 `GridCell`, `MapEdge`, 경로 계산, 관리자 승인 처리를 하지 않는다.
 
 ## 현재 연동 계약
 
@@ -153,7 +153,6 @@ python -c "import hailo_platform; print('hailo_platform import 성공')"
 RUN_MODE=dry-run
 CCTV_CODE=CCTV_001
 VIDEO_SOURCE=rtsp://{USER}:{PASSWORD}@{CCTV_IP}:554/{STREAM_PATH}
-ROI_CONFIG_PATH=./config/roi/CCTV_001.json
 DETECTOR_BACKEND=hailo
 MODEL_PATH=/실제/모델/경로/model.hef
 DETECTOR_CONF_THRESHOLD=0.4
@@ -169,12 +168,14 @@ python -m raspberry_pi_congestion.main dry-run
 `CCTV_001`, `CCTV_002`를 각각 검증한 뒤 `RUN_MODE=rtsp`로 백엔드 통합
 테스트를 수행한다. RTSP URL, 카메라 비밀번호, 장치 토큰은 커밋하지 않는다.
 
-개발 PC에서 추론 화면을 확인하려면 `SHOW_PREVIEW=true`를 설정한다. 노란색은 ROI,
-초록색 박스는 ROI 안에서 집계된 사람, 주황색 박스는 ROI 밖 사람이다. 창에서 `Q` 또는
-`Esc`를 누르면 파이프라인과 미리보기 창이 함께 종료된다. 기본값은 `false`이며 전송용
-JPEG에는 오버레이가 포함되지 않는다.
+개발 PC에서 추론 화면을 확인하려면 `SHOW_PREVIEW=true`를 설정한다. 초록색 박스는 집계된
+사람이다. ROI를 설정한 경우 노란색 선이 ROI, 주황색 박스가 ROI 밖 사람이다. 창에서 `Q` 또는
+`Esc`를 누르면 파이프라인과 미리보기 창이 함께 종료된다. 기본값은 `false`이다.
+전송용 모니터링·이벤트 JPEG에도 같은 박스와 인원수가 표시된다.
 
-ROI는 CCTV별 파일로 저장한다. `ROI_CONFIG_PATH`를 생략하면 `./config/roi/CCTV_001.json`처럼 장치 코드 기반 경로를 사용한다.
+기본값은 ROI 없이 화면 전체의 사람을 집계한다. 특정 영역만 집계하려면 `setup-roi`로 ROI를
+CCTV별 파일로 저장한 뒤 `ROI_CONFIG_PATH`에 그 경로를 지정한다. `setup-roi`는
+`ROI_CONFIG_PATH`가 없으면 `./config/roi/{CCTV_CODE}.json`에 저장한다.
 
 ```powershell
 python -m raspberry_pi_congestion.main setup-roi
