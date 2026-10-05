@@ -59,6 +59,20 @@ def test_monitoring_jpeg_quality_must_be_between_1_and_100(value):
         AppConfig.from_env(env)
 
 
+def test_server_mode_accepts_any_registered_cctv_code():
+    config = AppConfig.from_env(
+        {
+            "RUN_MODE": "rtsp",
+            "VIDEO_SOURCE": "rtsp://camera/stream",
+            "CCTV_CODE": "CCTV_122",
+            "SAFEROUTE_SERVER_BASE_URL": "http://server",
+            "DEVICE_AUTH_TOKEN": "device-token",
+        }
+    )
+
+    assert config.cctv_code == "CCTV_122"
+
+
 def test_show_preview_can_be_enabled_from_env():
     config = AppConfig.from_env(
         {

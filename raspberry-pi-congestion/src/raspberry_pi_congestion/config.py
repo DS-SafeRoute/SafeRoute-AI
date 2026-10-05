@@ -84,8 +84,6 @@ class AppConfig:
         monitoring_jpeg_quality = positive_int("MONITORING_JPEG_QUALITY", "70")
         if monitoring_jpeg_quality > 100:
             raise ConfigError("MONITORING_JPEG_QUALITY must be between 1 and 100")
-        if cctv_code not in {"CCTV_001", "CCTV_002"} and selected_mode not in {"dry-run", "test", "setup-roi"}:
-            raise ConfigError("CCTV_CODE must be CCTV_001 or CCTV_002")
         if selected_mode in {"file", "rtsp"} and not server:
             raise ConfigError("SAFEROUTE_SERVER_BASE_URL is required for server reporting modes")
         if selected_mode in {"file", "rtsp"} and not e.get("DEVICE_AUTH_TOKEN"):

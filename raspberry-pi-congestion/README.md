@@ -4,7 +4,7 @@ Raspberry Pi가 CCTV 영상의 ROI 안 사람 수를 5 FPS로 추론하고, Spri
 
 ## 현재 연동 계약
 
-- 장치 코드는 데모 기준 `CCTV_001` 또는 `CCTV_002`이고, 각 장치의 전용 Bearer Token은 `DEVICE_AUTH_TOKEN`으로만 주입한다.
+- 장치 코드(`CCTV_CODE`)는 BE에 등록된 CCTV 코드를 그대로 쓰고(예: `CCTV_122`), 각 장치의 전용 Bearer Token은 `DEVICE_AUTH_TOKEN`으로만 주입한다. 코드와 토큰의 일치 여부는 BE가 검증한다.
 - `GET /api/v1/device/congestion-config?cctvCode=...`를 훈련 중 5초, 비활성 중 1초 간격으로 조회한다. 비활성 간격을 짧게 둬서 훈련 시작을 빨리 알아챈다.
 - `trainingSessionId`는 BE가 준 UUID를 그대로 사용한다. Pi가 세션 ID를 생성하지 않는다.
 - `trainingActive=false`이면 추론, 관측값, 이벤트, 이미지 인코딩·업로드, Presigned URL 요청을 중단한다.
