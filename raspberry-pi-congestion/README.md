@@ -184,6 +184,23 @@ python -m raspberry_pi_congestion.main setup-roi
 
 서버 없이 검출/집계를 확인하려면 `dry-run` 또는 `test` 모드를 사용한다. 이 두 모드만 로컬 기본 설정을 사용하며 운영 모드는 반드시 BE 설정을 조회한다.
 
+## 상시 실행(systemd)
+
+운영 Pi는 rtsp 모드를 계속 켜 두고, BE의 `trainingActive`에 따라 추론을 시작하고 멈춘다.
+`deploy/raspberry-pi-congestion.service`의 경로를 실제 클론 위치와 가상환경에 맞게 고친 뒤 등록한다.
+
+```bash
+sudo cp deploy/raspberry-pi-congestion.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now raspberry-pi-congestion
+journalctl -u raspberry-pi-congestion -f
+```
+
+RTSP 재연결이 `RTSP_MAX_RECONNECTS`번 연속 실패하면 프로세스는 종료 코드 1로 끝나고,
+`multi_main`은 나머지 CCTV 프로세스도 정리한 뒤 같은 코드로 종료한다. 서비스는
+`Restart=always`라서 `RestartSec` 뒤 전체를 다시 띄운다. 직접 실행 중인 프로세스와 서비스를
+동시에 켜면 Hailo 장치를 두고 충돌하므로 테스트할 때는 서비스를 멈춘다.
+
 ## 재시도와 로컬 큐
 
 200/201을 포함한 모든 2xx는 성공이다. 5xx, timeout, 429는 동일한 `eventId`, 세션, 시간, 버전, payload로 제한 재시도한 뒤 SQLite 큐에 보관한다. 400/401/403 같은 영구 오류는 큐에 넣지 않는다. 이벤트 이미지 연결의 404/409는 이벤트 생성 순서를 고려해 재시도한다. Presigned URL은 큐에 저장하거나 재사용하지 않는다.
