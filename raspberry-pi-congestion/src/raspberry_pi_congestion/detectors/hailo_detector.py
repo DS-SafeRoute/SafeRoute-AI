@@ -27,7 +27,7 @@ class _Runtime(Protocol):
 class _HailoVStreamsRuntime:
     """HailoRT 4.x의 blocking InferVStreams를 감싼 batch=1 런타임."""
 
-    def __init__(self, hef_path: str) -> None:
+    def __init__(self, hef_path: str, multi_process_service: bool = True) -> None:
         try:
             from hailo_platform import (
                 ConfigureParams,
@@ -81,6 +81,9 @@ class _HailoVStreamsRuntime:
             device_params = VDevice.create_params()
             device_params.scheduling_algorithm = HailoSchedulingAlgorithm.ROUND_ROBIN
             device_params.group_id = "SHARED"
+            # multi_main은 CCTV마다 별도 프로세스를 띄우므로, 여러 프로세스가 장치 하나를
+            # 나눠 쓰려면 hailort.service(multi-process service)를 거쳐야 한다.
+            device_params.multi_process_service = multi_process_service
             self._vdevice = VDevice(device_params)
 
             configure_params = ConfigureParams.create_from_hef(
