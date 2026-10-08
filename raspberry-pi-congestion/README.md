@@ -128,6 +128,14 @@ sudo apt install -y dkms hailo-all
 sudo reboot
 ```
 
+`multi_main`은 CCTV마다 별도 프로세스를 띄우고, 각 프로세스는 HailoRT multi-process
+service를 거쳐 Hailo 장치 하나를 나눠 쓴다. `hailo-all`이 설치하는 `hailort.service`가
+실행 중이어야 하며, 꺼져 있으면 CCTV가 한 대여도 Hailo 초기화에 실패한다.
+
+```bash
+systemctl status hailort --no-pager
+```
+
 장치와 모델을 확인한다.
 
 ```bash
