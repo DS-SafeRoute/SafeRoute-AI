@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from raspberry_pi_congestion.video_source import FileVideoSource, RtspVideoSource
+from raspberry_pi_congestion.video_source import FileVideoSource, RtspStreamLostError, RtspVideoSource
 
 
 class Capture:
@@ -236,7 +236,8 @@ def test_rtsp_reconnect_limit_and_backoff():
     sleeps = []
     source = RtspVideoSource("rtsp://user:password@camera/stream", max_reconnects=2,
                              base_delay_sec=.5, capture_factory=factory, sleeper=sleeps.append)
-    assert list(source.frames()) == []
+    with pytest.raises(RtspStreamLostError):
+        list(source.frames())
     assert sleeps == [.5, 1.0]
     assert len(captures) == 3
     source.close()

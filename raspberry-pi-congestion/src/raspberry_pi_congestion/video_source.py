@@ -153,6 +153,10 @@ class FileVideoSource(VideoSource):
             self._cap = None
 
 
+class RtspStreamLostError(RuntimeError):
+    """재연결 한도를 넘겨 RTSP 스트림을 더 이상 받을 수 없을 때 발생한다."""
+
+
 class RtspVideoSource(VideoSource):
     def __init__(self, url: str, max_reconnects: int = 5, base_delay_sec: float = 1.0,
                  max_delay_sec: float = 30.0, capture_factory: Optional[Callable] = None,
@@ -176,8 +180,8 @@ class RtspVideoSource(VideoSource):
                 yield frame
                 continue
             if reconnects >= self.max_reconnects:
-                logger.error("RTSP reconnect limit reached (%d)", self.max_reconnects)
-                return
+                # 정상 종료와 구분해야 systemd 같은 감독자가 프로세스를 다시 띄운다.
+                raise RtspStreamLostError(f"RTSP reconnect limit reached ({self.max_reconnects})")
             delay = min(self.base_delay_sec * (2 ** reconnects), self.max_delay_sec)
             reconnects += 1
             logger.warning("RTSP read failed; reconnect %d/%d in %.1fs", reconnects, self.max_reconnects, delay)

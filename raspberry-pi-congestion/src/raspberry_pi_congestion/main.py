@@ -14,7 +14,7 @@ from .preview import OpenCvPreview
 from .relay import LightCommandExecutor, RelayController, RelayControllerError
 from .roi_counter import RoiCounter
 from .roi_provider import InteractiveRoiSelector, JsonRoiProvider
-from .video_source import FileVideoSource, create_video_source
+from .video_source import FileVideoSource, RtspStreamLostError, create_video_source
 from .window_aggregator import WindowAggregator
 
 logger = logging.getLogger(__name__)
@@ -112,7 +112,11 @@ def main(argv=None) -> int:
                                   delivery_monitoring_workers=config.delivery_monitoring_workers)
     if device_client is not None and config.relay_host:
         _start_light_command_executor(config, device_client)
-    pipeline.run()
+    try:
+        pipeline.run()
+    except RtspStreamLostError as exc:
+        logger.error("%s; 재시작이 필요해 실패 코드로 종료합니다", exc)
+        return 1
     return 0
 
 
